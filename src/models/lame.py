@@ -62,12 +62,35 @@ class LAME:
     # -------------------------------------------------------------- accessors
 
     def history(self) -> pd.Series:
+        """Composite series, restricted to rows with adequate indicator coverage."""
         if self._composite is None:
             raise RuntimeError("Call compute(panel) before history().")
-        return self._composite["composite"].dropna()
+        composite = self._composite["composite"].dropna()
+        if self._zscores is None or self._zscores.empty:
+            return composite
+        coverage = self._zscores.notna().sum(axis=1)
+        threshold = max(int(coverage.max() * 0.7), 1)
+        full_idx = coverage[coverage >= threshold].index
+        return composite.loc[composite.index.intersection(full_idx)]
+
+    def reference_date(self) -> pd.Timestamp | None:
+        """Latest month-end where indicator coverage is at least 70% of peak.
+
+        Slow-release monthlies (UNRATE, PAYEMS, JOLTS) trail weekly claims data
+        by 2–6 weeks; snapshotting the *very* latest row often shows only ICSA
+        and CCSA. The reference date is the latest jointly-observed month.
+        """
+        if self._zscores is None or self._zscores.empty:
+            return None
+        coverage = self._zscores.notna().sum(axis=1)
+        if coverage.max() == 0:
+            return None
+        threshold = max(int(coverage.max() * 0.7), 1)
+        adequate = coverage[coverage >= threshold]
+        return adequate.index[-1] if not adequate.empty else None
 
     def current_breakdown(self) -> pd.DataFrame:
-        """Snapshot the latest reading: value, z, weight, contribution by indicator."""
+        """Snapshot at the reference date: value, z, weight, contribution by indicator."""
         if self._composite is None:
             raise RuntimeError("Call compute(panel) before current_breakdown().")
         z = self._zscores
@@ -76,9 +99,13 @@ class LAME:
         if z is None or w is None or v is None:
             raise RuntimeError("Internal state missing — recompute the model.")
 
-        z_last = _last_valid_row(z)
-        w_last = _last_valid_row(w)
-        v_last = _last_valid_row(v)
+        ref = self.reference_date()
+        if ref is None:
+            return pd.DataFrame(columns=["name", "current_value", "z_score", "weight", "contribution"])
+
+        z_row = z.loc[ref] if ref in z.index else pd.Series(dtype=float)
+        w_row = w.loc[ref] if ref in w.index else pd.Series(dtype=float)
+        v_row = v.loc[ref] if ref in v.index else pd.Series(dtype=float)
 
         rows = []
         for name in self.INDICATORS:
@@ -87,11 +114,11 @@ class LAME:
             rows.append(
                 {
                     "name": name,
-                    "current_value": float(v_last.get(name, np.nan)),
-                    "z_score": float(z_last.get(name, np.nan)),
-                    "weight": float(w_last.get(name, np.nan)),
+                    "current_value": float(v_row.get(name, np.nan)),
+                    "z_score": float(z_row.get(name, np.nan)),
+                    "weight": float(w_row.get(name, np.nan)),
                     "contribution": float(
-                        z_last.get(name, np.nan) * w_last.get(name, np.nan)
+                        z_row.get(name, np.nan) * w_row.get(name, np.nan)
                     ),
                 }
             )
