@@ -69,8 +69,14 @@ TRANSFORM_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def render(ensemble: RecessionEnsemble | None = None) -> None:
+def render(
+    ensemble: RecessionEnsemble | None = None,
+    oos_history: pd.DataFrame | None = None,
+    oos_stats: dict | None = None,
+    exclude_pandemic: bool = True,
+) -> None:
     _heading()
+    _model_controls(exclude_pandemic)
     _philosophy()
     _data_sources()
     _transforms()
@@ -79,9 +85,43 @@ def render(ensemble: RecessionEnsemble | None = None) -> None:
     _recession_section(ensemble)
     _composite_section()
     _calibration_section(ensemble)
+    _walk_forward_section(ensemble, oos_history, oos_stats)
     _nber_section()
     _limitations()
     _reproducibility()
+
+
+def _model_controls(exclude_pandemic: bool) -> None:
+    """Interactive toggle for the pandemic-exclusion training option."""
+    import streamlit as st
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:8px;">Model fit options</div>',
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        st.markdown(
+            f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.6;color:{PALETTE["text_primary"]};">'
+            "The 2020 pandemic recession was triggered by an exogenous shock, not a "
+            "business-cycle peak. When it's included in training, it pulls labor and "
+            "credit coefficients in directions that don't represent typical cyclical dynamics. "
+            "We exclude <code>2020-02</code> through <code>2021-06</code> by default; toggle "
+            "it back in to see how much the coefficients shift."
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        new_value = st.toggle(
+            "Exclude 2020-2021 from training",
+            value=exclude_pandemic,
+            key="exclude_pandemic_toggle",
+        )
+        if new_value != exclude_pandemic:
+            st.session_state.exclude_pandemic = new_value
+            st.cache_resource.clear()
+            st.rerun()
 
 
 # ---------------------------------------------------------------- top
@@ -464,11 +504,159 @@ def _calibration_section(ensemble: RecessionEnsemble | None) -> None:
                 )
 
 
+# ---------------------------------------------------------------- walk-forward
+
+
+def _walk_forward_section(
+    ensemble: RecessionEnsemble | None,
+    oos_history: pd.DataFrame | None,
+    oos_stats: dict | None,
+) -> None:
+    """Out-of-sample backtest: how the model would have called recessions in real time."""
+    _section_header("9. Out-of-sample backtest")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The headline ensemble is fit on the full sample, which means its in-sample "
+        "Brier/AUC overstate what a real-time forecaster would have achieved. A walk-forward "
+        "backtest fixes this: at each refit date we drop everything from that date forward, "
+        "refit the submodels with the same sign-constrained BIC selection, and predict the "
+        "next 12 months. No future information enters any prediction by construction.</p>"
+        "<p><b>Protocol.</b> Annual refits starting <code>1985-01-01</code>. Between refits "
+        "the most recent fit is used to score every month. Pandemic-exclusion (if enabled) "
+        "applies to each refit's training window too.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    if oos_history is None or oos_history.empty:
+        st.info("Walk-forward backtest not available — model still initialising.")
+        return
+
+    # --- OOS history + true recessions -----------------------------------
+    st.markdown(
+        '<div class="label-small" style="margin-top:8px;">Out-of-sample ensemble probability · NBER recessions shaded</div>',
+        unsafe_allow_html=True,
+    )
+
+    from src.ui.components import add_recession_shading, apply_template, reliability_diagram
+    from src.data.nber import load_nber_recessions
+
+    nber = load_nber_recessions()
+    fig = go.Figure()
+    s = oos_history["ensemble"].dropna()
+    fig.add_trace(
+        go.Scatter(
+            x=s.index, y=s.values, mode="lines",
+            line=dict(color=PALETTE["accent"], width=1.4),
+            fill="tozeroy", fillcolor="rgba(212,165,116,0.10)",
+            name="OOS ensemble",
+            hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra></extra>",
+        )
+    )
+    fig.add_hline(y=50, line=dict(color="#3d4754", width=1, dash="dot"))
+    add_recession_shading(fig, nber)
+    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
+    apply_template(fig, height=360, show_legend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Calibration metrics -----------------------------------
+    if oos_stats is None:
+        return
+    left, right = st.columns([2, 1])
+    with left:
+        st.markdown('<div class="label-small">OOS reliability diagram</div>', unsafe_allow_html=True)
+        fig = reliability_diagram(oos_stats.get("reliability_curve", pd.DataFrame()))
+        st.plotly_chart(fig, use_container_width=True)
+    with right:
+        brier = oos_stats.get("brier", float("nan"))
+        baseline = oos_stats.get("baseline_brier", float("nan"))
+        skill = oos_stats.get("skill_score", float("nan"))
+        auc = oos_stats.get("auc", float("nan"))
+        n = oos_stats.get("n_obs", 0)
+        rows = [
+            ("OOS Brier", f"{brier:.4f}" if np.isfinite(brier) else "—"),
+            ("Base-rate Brier", f"{baseline:.4f}" if np.isfinite(baseline) else "—"),
+            ("Skill score", f"{skill:+.1%}" if np.isfinite(skill) else "—"),
+            ("OOS AUC", f"{auc:.3f}" if np.isfinite(auc) else "—"),
+            ("OOS observations", f"{n:,}"),
+        ]
+        body = "".join(
+            f'<div class="submodel-row"><span class="name">{label}</span>'
+            f'<span class="value">{value}</span></div>'
+            for label, value in rows
+        )
+        st.markdown(
+            '<div class="panel"><div class="panel-header"><span>OOS calibration</span></div>'
+            f'<div class="panel-body">{body}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # --- Coefficient evolution -----------------------------------
+    coef_hist = oos_history.attrs.get("coef_history", [])
+    if coef_hist:
+        _render_coef_evolution(coef_hist)
+
+
+def _render_coef_evolution(coef_hist: list[dict]) -> None:
+    """How each submodel's retained features change over the walk-forward refits."""
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">Retained features across refits · '
+        'shows where the model is structurally stable vs not</div>',
+        unsafe_allow_html=True,
+    )
+    df = pd.DataFrame(coef_hist)
+    if df.empty:
+        return
+    # For each (submodel, feature), plot coefficient time series.
+    fig = go.Figure()
+    feature_groups: dict[tuple[str, str], list[tuple[pd.Timestamp, float]]] = {}
+    for _, row in df.iterrows():
+        sub = row["submodel"]
+        for feat in row["features"]:
+            coef = row["coefs"].get(feat, np.nan)
+            feature_groups.setdefault((sub, feat), []).append((row["refit_date"], float(coef)))
+
+    # Take the top 12 most persistent features by appearance count, plot those.
+    ranked = sorted(feature_groups.items(), key=lambda kv: -len(kv[1]))[:12]
+    color_cycle = [
+        PALETTE["accent"], PALETTE["submodel"]["yield_curve"], PALETTE["submodel"]["labor"],
+        PALETTE["submodel"]["credit"], PALETTE["submodel"]["housing"], PALETTE["submodel"]["sentiment"],
+        "#9d7aa8", "#7a8b99", "#d4a574", "#5ba3a3", "#c97c5d", "#e8b339",
+    ]
+    for i, ((sub, feat), pts) in enumerate(ranked):
+        pts.sort(key=lambda t: t[0])
+        xs, ys = zip(*pts)
+        fig.add_trace(
+            go.Scatter(
+                x=list(xs), y=list(ys), mode="lines+markers",
+                name=f"{sub} · {feat}",
+                line=dict(color=color_cycle[i % len(color_cycle)], width=1.2),
+                marker=dict(size=4),
+                hovertemplate=f"{sub} · {feat}<br>%{{x|%Y}}: %{{y:+.3f}}<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0, line=dict(color="#3d4754", width=1, dash="dot"))
+    fig.update_yaxes(title="Probit coefficient")
+    fig.update_xaxes(title="Refit date")
+    from src.ui.components import apply_template
+    apply_template(fig, height=380)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
+        "Features whose coefficient is stable across refits are structurally informative; "
+        "features whose coefficient swings between refits should be read with caution."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # ---------------------------------------------------------------- nber
 
 
 def _nber_section() -> None:
-    _section_header("9. NBER recession dates")
+    _section_header("10. NBER recession dates")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -496,42 +684,50 @@ def _nber_section() -> None:
 
 
 def _limitations() -> None:
-    _section_header("10. Limitations")
+    _section_header("11. Limitations")
     points = [
         (
-            "In-sample fit only.",
-            "The ensemble is fit on the full available history. We do not show a "
-            "walk-forward backtest in the live UI; an honest out-of-sample analysis "
-            "needs to be done separately and is sketched in the methodology notebook.",
+            "In-sample headline · mitigated.",
+            "The default reading is fit on the full sample. A full walk-forward backtest "
+            "(section 9 above) is computed at app startup and surfaces true out-of-sample "
+            "Brier / AUC / reliability — use that for honest predictive performance, not "
+            "the in-sample headline.",
         ),
         (
-            "Regime shifts.",
-            "Coefficient sign priors and equal-weight aggregation are static. The 2020 "
-            "pandemic recession is included in the sample and pulls some coefficients in "
-            "ways that may not reflect typical business-cycle dynamics.",
+            "Regime shifts · partly mitigated.",
+            "The 2020 pandemic is excluded from training by default; toggle the option at "
+            "the top of this page to see how coefficients shift when it's included. "
+            "We still use static sign priors and equal-weight aggregation — a fully "
+            "regime-switching specification (e.g. Markov-switching probit) is out of scope.",
         ),
         (
-            "Series availability.",
-            "JOLTS series begin in 2000; the BofA high-yield OAS begins in 1996. The "
-            "labor and credit submodels rebuild as more history accumulates.",
+            "Series availability · partial.",
+            "JOLTS begin in 2000 and the BofA high-yield OAS begins in 1996. The credit "
+            "submodel relies on BAA10Y and DRTSCILM pre-1996 and on all three series "
+            "after that. The walk-forward backtest's earliest credit predictions are "
+            "therefore based on fewer features than recent ones.",
         ),
         (
-            "Look-ahead in NBER dating.",
-            "Because the NBER announces dates with substantial lag, our target series is "
-            "revised in real time. Historical NBER dates rarely change after the initial "
-            "announcement, but the *latest* peak/trough can be revised by several months.",
+            "Look-ahead in NBER dating · partly mitigated.",
+            "Section 9 reports walk-forward predictions using the NBER record as known "
+            "today; we don't store NBER vintages. As a real-time check that does not "
+            "depend on NBER, the Labor page also shows the Sahm Rule (FRED "
+            "<code>SAHMREALTIME</code>) — a recession indicator that uses only real-time "
+            "unemployment and is not revised after release.",
         ),
         (
-            "Street estimates are manually maintained.",
-            "The Cleveland Fed, NY Fed, Bloomberg, and Goldman comparison values are "
-            "edited by hand in <code>data/street_estimates.csv</code>. They are a periodic "
-            "sanity-check, not a real-time benchmark.",
+            "Street estimates · partly automated.",
+            "<b>NY Fed</b> probability is pulled live from FRED "
+            "(<code>RECPROUSM156N</code>, the Chauvet–Piger smoothed model published by "
+            "St Louis Fed). <b>Cleveland Fed, Bloomberg, Goldman</b> are still maintained "
+            "by hand because their probabilities aren't published as machine-readable feeds.",
         ),
         (
-            "Composite weights are a choice, not a derivation.",
-            "The 50/25/25 blend is judgmental. A reasonable analyst could weight the curve "
-            "more heavily; this dashboard is open-source precisely so you can fork and "
-            "re-weight.",
+            "Composite weights · interactive.",
+            "The default 50/25/25 blend is judgmental. The <i>Dashboard</i> page now has "
+            "a weight-sensitivity panel so any reader can re-weight the composite on the "
+            "fly. The interactive panel shows how much each lens contributes under your "
+            "chosen weighting; the default is documented above for reference.",
         ),
     ]
     body = "".join(
@@ -551,7 +747,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("11. Reproducibility")
+    _section_header("12. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'

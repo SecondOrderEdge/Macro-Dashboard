@@ -53,6 +53,15 @@ SERIES_REGISTRY: dict[str, dict] = {
     "vixcls":  {"fred_id": "VIXCLS",  "freq": "D", "transform": "ma_3m"},
     "usslind": {"fred_id": "USSLIND", "freq": "M", "transform": "level"},
     "sp500":   {"fred_id": "SP500",   "freq": "D", "transform": "ret_6m"},
+
+    # External / comparison probabilities (not used as inputs; pulled for display).
+    "ny_fed_prob": {"fred_id": "RECPROUSM156N", "freq": "M", "transform": "level"},
+
+    # Real-time recession nowcast — Sahm Rule (no NBER look-ahead).
+    "sahm": {"fred_id": "SAHMREALTIME", "freq": "M", "transform": "level"},
+
+    # Long-history vacancy proxy (Conference Board help-wanted; back-extends JOLTS).
+    "hwiuratio": {"fred_id": "HWIURATIO", "freq": "M", "transform": "level"},
 }
 
 

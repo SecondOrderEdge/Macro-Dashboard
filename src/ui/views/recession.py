@@ -25,7 +25,7 @@ from src.ui.theme import PALETTE
 _STREET_PATH = Path(__file__).resolve().parents[3] / "data" / "street_estimates.csv"
 
 
-def render(model: RecessionEnsemble, nber: pd.Series) -> None:
+def render(model: RecessionEnsemble, nber: pd.Series, panel: pd.DataFrame | None = None) -> None:
     try:
         current = model.predict_current()
         history = model.predict_history()
@@ -49,7 +49,7 @@ def render(model: RecessionEnsemble, nber: pd.Series) -> None:
     elif selected == "The Reading":
         _render_reading(current, history, nber)
     else:
-        _render_vs_street(current)
+        _render_vs_street(current, panel)
 
 
 _TAB_STYLES = {
@@ -402,7 +402,7 @@ def _watch_next(submodels: dict[str, float]) -> list[tuple[str, str]]:
 # ----------------------------------------------------------------- vs. Street
 
 
-def _render_vs_street(current: dict) -> None:
+def _render_vs_street(current: dict, panel: pd.DataFrame | None = None) -> None:
     ensemble_now = current["ensemble"]
     try:
         street = pd.read_csv(_STREET_PATH, parse_dates=["date"])
@@ -414,10 +414,23 @@ def _render_vs_street(current: dict) -> None:
         return
 
     latest = street.sort_values("date").iloc[-1]
+
+    # Live NY Fed-style probability from FRED (Chauvet-Piger smoothed series).
+    ny_fed_live = float("nan")
+    ny_fed_label = "NY Fed (CSV)"
+    ny_fed_asof = ""
+    if panel is not None and "RECPROUSM156N" in panel.columns:
+        from src.models.external import ny_fed_probability
+        ny_series = ny_fed_probability(panel)
+        if not ny_series.empty:
+            ny_fed_live = float(ny_series.iloc[-1])
+            ny_fed_label = "NY Fed (live · FRED)"
+            ny_fed_asof = f" · as of {ny_series.index[-1].strftime('%b %Y')}"
+
     rows = {
         "This ensemble": ensemble_now,
+        ny_fed_label: ny_fed_live if np.isfinite(ny_fed_live) else float(latest["ny_fed"]),
         "Cleveland Fed": float(latest["cleveland_fed"]),
-        "NY Fed": float(latest["ny_fed"]),
         "Bloomberg": float(latest["bloomberg"]),
         "Goldman Sachs": float(latest["goldman"]),
     }
@@ -443,11 +456,14 @@ def _render_vs_street(current: dict) -> None:
     st.markdown(
         f'<div class="panel"><div class="panel-header"><span>How to read this</span></div>'
         f'<div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
-        "Street estimates (Cleveland/NY Fed, Bloomberg, Goldman) are pulled from public "
-        "research and refreshed manually — see <code>data/street_estimates.csv</code>. "
-        "Our ensemble tends to print below the Fed yield-curve models because labor and "
-        "credit conditions damp the curve signal, and above pure equity-vol indicators "
-        "when sentiment is unusually calm relative to the rates picture."
+        f"<b>NY Fed</b> is pulled live from FRED (<code>RECPROUSM156N</code>, the "
+        "Chauvet–Piger smoothed model published by St Louis Fed){ny_fed_asof}. "
+        "<b>Cleveland Fed, Bloomberg, Goldman</b> are still maintained by hand in "
+        "<code>data/street_estimates.csv</code> — their underlying probabilities are not "
+        "published as machine-readable feeds. Our ensemble tends to print below the Fed "
+        "yield-curve models because labor and credit conditions damp the curve signal, "
+        "and above pure equity-vol indicators when sentiment is unusually calm relative "
+        "to the rates picture."
         "</div></div>",
         unsafe_allow_html=True,
     )

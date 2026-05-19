@@ -302,13 +302,31 @@ class RecessionEnsemble:
     SUBMODELS: list[SubmodelSpec] = SUBMODELS
     START_DATE: pd.Timestamp = pd.Timestamp("1976-01-01")
 
-    def __init__(self):
+    def __init__(
+        self,
+        exclude_periods: list[tuple[str, str]] | None = None,
+    ):
+        """``exclude_periods`` is a list of ``(start, end)`` date strings to
+        drop from training (e.g. ``[("2020-02", "2021-06")]`` to exclude the
+        pandemic distortion). Applied to the in-sample fit *and* to every
+        walk-forward refit."""
         self._fitted: dict[str, _FittedSubmodel] = {}
         self._designs: dict[str, pd.DataFrame] = {}
         self._target: pd.Series | None = None
         self._panel: pd.DataFrame | None = None
+        self.exclude_periods = [
+            (pd.Timestamp(a), pd.Timestamp(b)) for a, b in (exclude_periods or [])
+        ]
 
     # ------------------------------------------------------------------ fit
+
+    def _apply_exclusions(self, idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        if not self.exclude_periods:
+            return idx
+        keep = pd.Series(True, index=idx)
+        for a, b in self.exclude_periods:
+            keep &= ~((idx >= a) & (idx <= b))
+        return idx[keep]
 
     def fit(self, data: pd.DataFrame, nber: pd.Series) -> None:
         """Fit all five submodels.
@@ -333,10 +351,15 @@ class RecessionEnsemble:
             common = X.index.intersection(self._target.index)
             X = X.loc[common]
             y = self._target.loc[common]
-            fitted = _select_submodel(spec, X, y)
+            # Drop excluded periods from training only.
+            train_idx = self._apply_exclusions(X.index)
+            X_train = X.loc[train_idx]
+            y_train = y.loc[train_idx]
+            fitted = _select_submodel(spec, X_train, y_train)
             if fitted is None:
                 continue
             self._fitted[spec.name] = fitted
+            # Keep the full (unexcluded) design for prediction/history.
             self._designs[spec.name] = X
 
     # -------------------------------------------------------- introspection
@@ -412,6 +435,141 @@ class RecessionEnsemble:
             .dropna()
         )
         return {"brier": brier, "auc": auc, "reliability_curve": rel}
+
+    # ----------------------------------------------------- walk-forward backtest
+
+    def walk_forward_predict(
+        self,
+        data: pd.DataFrame,
+        nber: pd.Series,
+        oos_start: str = "1985-01-01",
+        refit_every_months: int = 12,
+    ) -> pd.DataFrame:
+        """Produce true out-of-sample submodel + ensemble probabilities.
+
+        At each refit date (``refit_every_months`` cadence from ``oos_start``)
+        we refit every submodel using only data strictly before that date,
+        applying the same sign-constrained BIC selection as the in-sample
+        fit. We then use that fit to predict probabilities for every month
+        between this refit and the next. No future information enters any
+        prediction by construction.
+
+        Returns a DataFrame indexed by month with columns:
+        ``ensemble`` (mean of available submodels) plus one column per
+        submodel name. Probabilities are in percent.
+        """
+        target = nber.copy()
+        target.index = pd.DatetimeIndex(target.index).to_period("M").to_timestamp()
+        target = target.astype(int)
+
+        # Pre-build design matrices once — they don't depend on the fit window.
+        designs: dict[str, pd.DataFrame] = {}
+        for spec in self.SUBMODELS:
+            X = _build_design_matrix(spec, data)
+            if not X.empty:
+                designs[spec.name] = X
+
+        if not designs:
+            return pd.DataFrame()
+
+        start_ts = pd.Timestamp(oos_start)
+        end_ts = max(d.index.max() for d in designs.values())
+        refit_dates = pd.date_range(start=start_ts, end=end_ts, freq=f"{refit_every_months}MS")
+        if len(refit_dates) == 0:
+            return pd.DataFrame()
+
+        oos: dict[str, dict[pd.Timestamp, float]] = {name: {} for name in designs}
+        coef_history: list[dict] = []
+
+        for i, refit_ts in enumerate(refit_dates):
+            next_ts = refit_dates[i + 1] if i + 1 < len(refit_dates) else end_ts + pd.DateOffset(months=1)
+            target_train = target.loc[target.index < refit_ts]
+
+            for spec in self.SUBMODELS:
+                X = designs.get(spec.name)
+                if X is None:
+                    continue
+                X_pre = X.loc[X.index < refit_ts]
+                X_pre = X_pre.loc[X_pre.index >= self.START_DATE]
+                common = X_pre.index.intersection(target_train.index)
+                X_train = X_pre.loc[common]
+                # Apply pandemic / regime exclusions to the training set.
+                train_idx = self._apply_exclusions(X_train.index)
+                X_train = X_train.loc[train_idx]
+                y_train = target_train.loc[X_train.index]
+                fitted = _select_submodel(spec, X_train, y_train)
+                if fitted is None:
+                    continue
+                coef_history.append(
+                    {
+                        "refit_date": refit_ts,
+                        "submodel": spec.name,
+                        "features": list(fitted.feature_names),
+                        "coefs": {k: float(v) for k, v in fitted.coefs.to_dict().items()},
+                    }
+                )
+                # Predict for [refit_ts, next_ts)
+                X_oos = X.loc[(X.index >= refit_ts) & (X.index < next_ts)].dropna(how="any")
+                if X_oos.empty:
+                    continue
+                preds = fitted.predict_path(X_oos)
+                for ts, p in preds.items():
+                    oos[spec.name][ts] = float(p) * 100.0
+
+        # Assemble result
+        cols = {name: pd.Series(d) for name, d in oos.items() if d}
+        if not cols:
+            return pd.DataFrame()
+        df = pd.concat(cols.values(), axis=1, keys=cols.keys()).sort_index()
+        df["ensemble"] = df.mean(axis=1, skipna=True)
+        order = ["ensemble"] + [c for c in df.columns if c != "ensemble"]
+        out = df[order]
+        out.attrs["coef_history"] = coef_history
+        out.attrs["oos_start"] = start_ts
+        out.attrs["refit_every_months"] = refit_every_months
+        return out
+
+    def oos_calibration_stats(
+        self,
+        oos_history: pd.DataFrame,
+        target: pd.Series,
+    ) -> dict:
+        """Brier / AUC / reliability on the walk-forward predictions."""
+        if oos_history.empty or "ensemble" not in oos_history.columns:
+            return {"brier": float("nan"), "auc": float("nan"), "reliability_curve": pd.DataFrame()}
+
+        target_aligned = target.copy()
+        target_aligned.index = pd.DatetimeIndex(target_aligned.index).to_period("M").to_timestamp()
+        target_aligned = target_aligned.astype(float)
+
+        pred = oos_history["ensemble"] / 100.0
+        df = pd.concat([pred.rename("p"), target_aligned.rename("y")], axis=1).dropna()
+        if df.empty:
+            return {"brier": float("nan"), "auc": float("nan"), "reliability_curve": pd.DataFrame()}
+
+        brier = float(((df["p"] - df["y"]) ** 2).mean())
+        # Baseline Brier: predict the in-window base rate at every step.
+        base_rate = float(df["y"].mean())
+        baseline_brier = float(((base_rate - df["y"]) ** 2).mean())
+        skill = 1.0 - (brier / baseline_brier) if baseline_brier > 0 else float("nan")
+        auc = _auc(df["y"].values, df["p"].values)
+
+        bins = np.linspace(0, 1, 11)
+        df["bin"] = pd.cut(df["p"], bins=bins, include_lowest=True)
+        rel = (
+            df.groupby("bin", observed=True)
+            .agg(predicted=("p", "mean"), actual=("y", "mean"), n=("y", "size"))
+            .reset_index(drop=True)
+            .dropna()
+        )
+        return {
+            "brier": brier,
+            "baseline_brier": baseline_brier,
+            "skill_score": skill,
+            "auc": auc,
+            "reliability_curve": rel,
+            "n_obs": len(df),
+        }
 
 
 def _auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
