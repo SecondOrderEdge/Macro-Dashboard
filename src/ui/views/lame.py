@@ -88,30 +88,40 @@ def _render_top(history: pd.Series, model: LAME, nber: pd.Series) -> None:
 
 
 def _render_breakdown(model: LAME) -> None:
+    ref = model.reference_date()
+    title_suffix = f" · contributions as of {ref.strftime('%b %Y')}" if ref is not None else ""
     st.markdown(
-        '<div class="label-small" style="margin-top:8px;">Indicator breakdown · 10 series</div>',
+        f'<div class="label-small" style="margin-top:8px;">Indicator breakdown · 10 series{title_suffix}</div>',
         unsafe_allow_html=True,
     )
     df = model.current_breakdown().copy()
     if df.empty:
         return
 
-    # Sort by absolute contribution for readability.
-    df = df.iloc[df["contribution"].abs().sort_values(ascending=False).index].reset_index(drop=True)
+    # Sort by absolute z-score so every indicator (even those with missing
+    # contribution at the reference date) gets ranked sensibly.
+    df = df.iloc[df["z_score"].abs().fillna(-1).sort_values(ascending=False).index].reset_index(drop=True)
 
     fig = go.Figure()
-    colors = [PALETTE["risk_low"] if v >= 0 else PALETTE["risk_high"] for v in df["z_score"]]
+    z_vals = df["z_score"].fillna(0)
+    colors = [PALETTE["risk_low"] if v >= 0 else PALETTE["risk_high"] for v in z_vals]
     fig.add_trace(
         go.Bar(
-            x=df["z_score"],
+            x=z_vals,
             y=df["name"],
             orientation="h",
             marker=dict(color=colors, line=dict(width=0)),
             hovertemplate=(
-                "%{y}<br>z: %{x:+.2f}σ<br>weight: %{customdata[0]:.1%}<br>"
-                "contribution: %{customdata[1]:+.2f}σ<extra></extra>"
+                "%{y}<br>z: %{x:+.2f}σ<br>weight: %{customdata[0]}<br>"
+                "contribution: %{customdata[1]}<extra></extra>"
             ),
-            customdata=np.stack([df["weight"].values, df["contribution"].values], axis=1),
+            customdata=np.stack(
+                [
+                    [f"{w:.1%}" if pd.notna(w) else "—" for w in df["weight"]],
+                    [f"{c:+.2f}σ" if pd.notna(c) else "—" for c in df["contribution"]],
+                ],
+                axis=1,
+            ),
         )
     )
     fig.add_vline(x=0, line=dict(color="#3d4754", width=1))
@@ -120,13 +130,25 @@ def _render_breakdown(model: LAME) -> None:
     apply_template(fig, height=360, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Compact table
-    display = df[["name", "current_value", "z_score", "weight", "contribution"]].copy()
-    display["current_value"] = display["current_value"].map(lambda v: f"{v:,.2f}")
-    display["z_score"] = display["z_score"].map(lambda v: f"{v:+.2f}σ")
-    display["weight"] = display["weight"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-    display["contribution"] = display["contribution"].map(lambda v: f"{v:+.3f}")
-    display.columns = ["indicator", "value", "z", "weight", "contribution"]
+    # Compact table: each indicator shows its own latest value + date, then the
+    # weight/contribution computed at the reference date.
+    display = df[["name", "as_of", "current_value", "z_score", "weight", "contribution"]].copy()
+    display["as_of"] = display["as_of"].map(
+        lambda d: pd.to_datetime(d).strftime("%Y-%m") if pd.notna(d) else "—"
+    )
+    display["current_value"] = display["current_value"].map(
+        lambda v: f"{v:,.2f}" if pd.notna(v) else "—"
+    )
+    display["z_score"] = display["z_score"].map(
+        lambda v: f"{v:+.2f}σ" if pd.notna(v) else "—"
+    )
+    display["weight"] = display["weight"].map(
+        lambda v: f"{v:.1%}" if pd.notna(v) else "—"
+    )
+    display["contribution"] = display["contribution"].map(
+        lambda v: f"{v:+.3f}" if pd.notna(v) else "—"
+    )
+    display.columns = ["indicator", "as of", "value", "z", "weight", "contribution"]
     st.dataframe(display, hide_index=True, use_container_width=True)
 
 

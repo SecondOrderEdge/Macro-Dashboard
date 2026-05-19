@@ -90,7 +90,17 @@ class LAME:
         return adequate.index[-1] if not adequate.empty else None
 
     def current_breakdown(self) -> pd.DataFrame:
-        """Snapshot at the reference date: value, z, weight, contribution by indicator."""
+        """Per-indicator snapshot.
+
+        * ``current_value`` / ``z_score`` / ``as_of`` are each indicator's own
+          most-recent observation, so the table is never blank just because one
+          series lags another (JOLTS, NFP, UNRATE all release at different
+          cadences).
+        * ``weight`` / ``contribution`` are computed at the composite's
+          reference date — the latest month where ≥70% of indicators are
+          jointly observed — so the contributions still reflect a consistent
+          point-in-time decomposition of the composite.
+        """
         if self._composite is None:
             raise RuntimeError("Call compute(panel) before current_breakdown().")
         z = self._zscores
@@ -100,26 +110,32 @@ class LAME:
             raise RuntimeError("Internal state missing — recompute the model.")
 
         ref = self.reference_date()
-        if ref is None:
-            return pd.DataFrame(columns=["name", "current_value", "z_score", "weight", "contribution"])
-
-        z_row = z.loc[ref] if ref in z.index else pd.Series(dtype=float)
-        w_row = w.loc[ref] if ref in w.index else pd.Series(dtype=float)
-        v_row = v.loc[ref] if ref in v.index else pd.Series(dtype=float)
+        w_row = w.loc[ref] if (ref is not None and ref in w.index) else pd.Series(dtype=float)
+        z_at_ref = z.loc[ref] if (ref is not None and ref in z.index) else pd.Series(dtype=float)
 
         rows = []
         for name in self.INDICATORS:
             if name not in z.columns:
                 continue
+            latest_v_series = v[name].dropna() if name in v.columns else pd.Series(dtype=float)
+            latest_z_series = z[name].dropna()
+            latest_v = float(latest_v_series.iloc[-1]) if not latest_v_series.empty else float("nan")
+            latest_z = float(latest_z_series.iloc[-1]) if not latest_z_series.empty else float("nan")
+            as_of = (
+                latest_v_series.index[-1] if not latest_v_series.empty
+                else (latest_z_series.index[-1] if not latest_z_series.empty else pd.NaT)
+            )
+            weight = float(w_row.get(name, np.nan))
+            z_for_contrib = float(z_at_ref.get(name, np.nan))
+            contribution = z_for_contrib * weight if np.isfinite(z_for_contrib) and np.isfinite(weight) else float("nan")
             rows.append(
                 {
                     "name": name,
-                    "current_value": float(v_row.get(name, np.nan)),
-                    "z_score": float(z_row.get(name, np.nan)),
-                    "weight": float(w_row.get(name, np.nan)),
-                    "contribution": float(
-                        z_row.get(name, np.nan) * w_row.get(name, np.nan)
-                    ),
+                    "current_value": latest_v,
+                    "z_score": latest_z,
+                    "weight": weight,
+                    "contribution": contribution,
+                    "as_of": as_of,
                 }
             )
         return pd.DataFrame(rows)
