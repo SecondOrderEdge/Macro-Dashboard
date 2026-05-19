@@ -46,8 +46,16 @@ def _load_nber() -> pd.Series:
 
 
 @st.cache_resource(show_spinner=False)
-def _build_models(_panel_id: str) -> dict:
-    """Build (fit) the three models. `_panel_id` is a hash to bust the cache."""
+def _build_models(cache_version: str) -> dict:
+    """Build (fit) the three models.
+
+    ``cache_version`` participates in Streamlit's resource cache key — bump
+    it whenever model or class code changes, otherwise the *old* instance
+    keeps being served (cache_resource hashes function source, not its
+    imported dependencies). The argument deliberately has no underscore
+    prefix: Streamlit skips underscore-prefixed args when computing the
+    cache key, which silently neutralises any value you pass.
+    """
     panel = _load_panel()
     nber = _load_nber()
     fwd = recession_in_next_12m(nber)
