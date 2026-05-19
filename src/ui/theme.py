@@ -116,7 +116,7 @@ html, body, [class*="css"]  {
 .submodel-row .name { color: #6b7280; letter-spacing: 0.1em; text-transform: uppercase; }
 .submodel-row .value { color: #d4d4d0; font-feature-settings: 'tnum'; }
 
-.cockpit-header {
+.dashboard-header {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
@@ -124,14 +124,14 @@ html, body, [class*="css"]  {
     border-bottom: 1px solid #1f2630;
     margin-bottom: 16px;
 }
-.cockpit-title {
+.dashboard-title {
     font-family: 'Fraunces', serif;
     font-weight: 400;
     font-size: 24px;
     letter-spacing: 0.02em;
     color: #d4d4d0;
 }
-.cockpit-subtitle {
+.dashboard-subtitle {
     color: #6b7280;
     font-size: 10px;
     letter-spacing: 0.25em;

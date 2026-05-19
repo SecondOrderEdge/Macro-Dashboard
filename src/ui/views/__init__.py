@@ -1,1 +1,1 @@
-"""View modules for the four cockpit screens."""
+"""View modules for the dashboard screens."""
