@@ -46,8 +46,8 @@ def _load_nber() -> pd.Series:
 
 
 @st.cache_resource(show_spinner=False)
-def _build_models(cache_version: str) -> dict:
-    """Build (fit) the three models.
+def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
+    """Build (fit) the three models + walk-forward backtest.
 
     ``cache_version`` participates in Streamlit's resource cache key — bump
     it whenever model or class code changes, otherwise the *old* instance
@@ -55,19 +55,42 @@ def _build_models(cache_version: str) -> dict:
     imported dependencies). The argument deliberately has no underscore
     prefix: Streamlit skips underscore-prefixed args when computing the
     cache key, which silently neutralises any value you pass.
+
+    ``exclude_pandemic`` drops 2020-02 through 2021-06 from training. The
+    pandemic recession was caused by an exogenous shock and pulls some
+    coefficients in directions that don't reflect typical business-cycle
+    dynamics; excluding it gives a model that's more representative of
+    pre-2020 cyclical behaviour.
     """
     panel = _load_panel()
     nber = _load_nber()
     fwd = recession_in_next_12m(nber)
 
-    ensemble = RecessionEnsemble()
+    exclude = [("2020-02", "2021-06")] if exclude_pandemic else None
+    ensemble = RecessionEnsemble(exclude_periods=exclude)
     ensemble.fit(panel, fwd)
 
     lame = LAME()
     lame.compute(panel)
 
     yc = YieldCurve(panel)
-    return {"ensemble": ensemble, "lame": lame, "yield_curve": yc, "panel": panel, "nber": nber}
+
+    # Walk-forward backtest — annual refits from 1985. Cached with the rest.
+    oos_history = ensemble.walk_forward_predict(
+        panel, fwd, oos_start="1985-01-01", refit_every_months=12,
+    )
+    oos_stats = ensemble.oos_calibration_stats(oos_history, fwd)
+
+    return {
+        "ensemble": ensemble,
+        "lame": lame,
+        "yield_curve": yc,
+        "panel": panel,
+        "nber": nber,
+        "oos_history": oos_history,
+        "oos_stats": oos_stats,
+        "exclude_pandemic": exclude_pandemic,
+    }
 
 
 # ------------------------------------------------------------------------- run
@@ -170,7 +193,10 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v2-labor-reference-date")
+            models = _build_models(
+                "v3-walk-forward",
+                exclude_pandemic=st.session_state.get("exclude_pandemic", True),
+            )
     except Exception as exc:
         _header(None)
         _nav()
@@ -186,13 +212,18 @@ def main() -> None:
     if selected == "Macro Dashboard":
         dashboard.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
-        recession.render(models["ensemble"], models["nber"])
+        recession.render(models["ensemble"], models["nber"], models["panel"])
     elif selected == "Labor":
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":
         curve.render(models["panel"], models["nber"])
     elif selected == "Methodology":
-        methodology.render(models["ensemble"])
+        methodology.render(
+            models["ensemble"],
+            oos_history=models.get("oos_history"),
+            oos_stats=models.get("oos_stats"),
+            exclude_pandemic=models.get("exclude_pandemic", True),
+        )
 
     st.markdown(
         f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'

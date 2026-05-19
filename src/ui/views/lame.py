@@ -41,6 +41,7 @@ def render(panel: pd.DataFrame, nber: pd.Series, model: LAME | None = None) -> N
         return
 
     _render_top(history, model, nber)
+    _render_sahm_rule(panel, nber)
     _render_breakdown(model)
     _render_diffusion(model, nber)
     _render_small_multiples(model, nber)
@@ -156,6 +157,84 @@ def _render_breakdown(model: LAME) -> None:
     )
     display.columns = ["indicator", "as of", "value", "z", "weight", "contribution"]
     st.dataframe(display, hide_index=True, use_container_width=True)
+
+
+def _render_sahm_rule(panel: pd.DataFrame, nber: pd.Series) -> None:
+    """Sahm Rule: real-time recession indicator with zero NBER look-ahead.
+
+    The Sahm Rule fires when the 3-month moving average of the unemployment
+    rate rises by 0.5pp or more above its 12-month low. It has historically
+    triggered at the start of every U.S. recession since 1970 with no false
+    positives. Crucially, it uses real-time UNRATE data and is not revised
+    after release — so it has no look-ahead in the way the NBER target does.
+    """
+    from src.models.external import sahm_rule, sahm_state
+
+    sahm = sahm_rule(panel)
+    if sahm.empty:
+        return
+
+    latest = float(sahm.iloc[-1])
+    label, severity = sahm_state(latest)
+    color = {
+        "low": PALETTE["risk_low"],
+        "elevated": PALETTE["risk_elevated"],
+        "high": PALETTE["risk_high"],
+        "critical": PALETTE["risk_critical"],
+    }[severity]
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">Sahm Rule · real-time recession indicator</div>',
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1, 3])
+    with left:
+        spark = sparkline_svg(sahm.tail(120).values, color=color)
+        subline = f"as of {sahm.index[-1].strftime('%b %Y')}"
+        st.markdown(
+            metric_card(
+                label="Sahm Rule",
+                value=f"{latest:.2f}",
+                unit="pp",
+                risk_color_hex=color,
+                sparkline_html=spark,
+                badge=label,
+                subline=subline,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=sahm.index, y=sahm.values, mode="lines",
+                line=dict(color=color, width=1.4),
+                fill="tozeroy", fillcolor=_fade(color, 0.10),
+                name="Sahm Rule",
+                hovertemplate="%{x|%b %Y}<br>%{y:.2f}pp<extra></extra>",
+            )
+        )
+        fig.add_hline(
+            y=0.5, line=dict(color=PALETTE["risk_critical"], width=1, dash="dash"),
+            annotation_text="trigger 0.5pp", annotation_position="top right",
+            annotation_font=dict(color=PALETTE["risk_critical"], size=10),
+        )
+        add_recession_shading(fig, nber)
+        fig.update_yaxes(title="UNRATE 3m-MA minus 12m-min (pp)")
+        apply_template(fig, height=300, show_legend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:12px;line-height:1.6;color:{PALETTE["text_primary"]};">'
+        "The Sahm Rule is a complement to the labor composite. It uses only the "
+        "unemployment rate (in real time, with no look-ahead) and has triggered at the "
+        "onset of every U.S. recession since 1970. A reading near or above 0.5pp is the "
+        "headline real-time recession signal. Source: <code>SAHMREALTIME</code> on FRED."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_diffusion(model: LAME, nber: pd.Series) -> None:

@@ -44,6 +44,7 @@ def render(
     _row_one(current, history, lame_hist, spreads)
     _row_two(history, lame_hist, spreads, nber)
     _row_three(ensemble_now, lame_now, curve_now, composite, current)
+    _row_weight_sensitivity(ensemble_now, lame_now, curve_now)
     _row_four_analogues(history, lame_hist, spreads, nber, ensemble_now, lame_now, curve_now)
 
 
@@ -386,5 +387,87 @@ def _row_four_analogues(
         "Analogue distance is Euclidean in standardised (ensemble probability, labor σ, 10Y−3M spread) space "
         "and excludes dates within the last 24 months so the comparison surfaces genuinely earlier regimes."
         "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# --------------------------------------------------------- weight sensitivity
+
+
+def _row_weight_sensitivity(ensemble_now: float, lame_now: float, curve_now: float) -> None:
+    """Interactive sliders that let the user re-weight the composite."""
+    from src.models.composite import composite_risk, lame_to_risk, curve_to_risk
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">'
+        'Composite weight sensitivity · re-weight on the fly</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:{PALETTE["text_muted"]};font-size:12px;margin-bottom:8px;">'
+        "The default 50/25/25 blend (recession / labor / curve) is judgmental — a reasonable "
+        "analyst could weight the curve more heavily, or rely on labor alone. Drag the sliders "
+        "to see how the composite would change. Weights are renormalised to 100% automatically."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns([1, 1, 1, 2])
+    with cols[0]:
+        w_ens = st.slider("Recession ensemble", 0, 100, 50, 5, key="w_ens")
+    with cols[1]:
+        w_lame = st.slider("Labor", 0, 100, 25, 5, key="w_lame")
+    with cols[2]:
+        w_curve = st.slider("Yield curve", 0, 100, 25, 5, key="w_curve")
+
+    total = max(w_ens + w_lame + w_curve, 1)
+    ne, nl, nc = w_ens / total, w_lame / total, w_curve / total
+
+    ensemble_risk = float(np.clip(ensemble_now, 0, 100)) if np.isfinite(ensemble_now) else 0.0
+    lame_risk_v = lame_to_risk(lame_now) if np.isfinite(lame_now) else 0.0
+    curve_risk_v = curve_to_risk(curve_now) if np.isfinite(curve_now) else 0.0
+
+    custom_score = ne * ensemble_risk + nl * lame_risk_v + nc * curve_risk_v
+    default_score = composite_risk(ensemble_now, lame_now, curve_now)["composite"]
+
+    band = (
+        "LOW" if custom_score < 20 else
+        "ELEVATED" if custom_score < 40 else
+        "HIGH" if custom_score < 60 else
+        "CRITICAL"
+    )
+    color = risk_color(band)
+
+    with cols[3]:
+        st.markdown(
+            '<div class="panel" style="height:100%;">'
+            '<div class="panel-header"><span>Custom-weighted composite</span></div>'
+            '<div class="panel-body">'
+            f'<div style="display:flex;align-items:baseline;gap:24px;">'
+            f'<div class="metric-big data-font" style="color:{color};">{custom_score:.0f}</div>'
+            f'<div>'
+            f'<div class="risk-badge" style="color:{color};">{band}</div>'
+            f'<div class="metric-sub">default (50/25/25): {default_score}</div>'
+            f'</div></div>'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # Show contribution breakdown
+    rows = [
+        ("Ensemble", f"{ne:.0%}", f"{ensemble_risk:.0f}", f"{ne * ensemble_risk:.1f}", PALETTE["accent"]),
+        ("Labor",    f"{nl:.0%}", f"{lame_risk_v:.0f}",   f"{nl * lame_risk_v:.1f}",   PALETTE["submodel"]["labor"]),
+        ("Curve",    f"{nc:.0%}", f"{curve_risk_v:.0f}",  f"{nc * curve_risk_v:.1f}",  PALETTE["submodel"]["yield_curve"]),
+    ]
+    body = "".join(
+        f'<div class="submodel-row">'
+        f'<span class="name" style="color:{c};">{name}</span>'
+        f'<span class="value">{wt} weight · {sc} risk · {pts} pts</span>'
+        '</div>'
+        for name, wt, sc, pts, c in rows
+    )
+    st.markdown(
+        '<div class="panel"><div class="panel-header"><span>Contribution breakdown</span></div>'
+        f'<div class="panel-body">{body}</div></div>',
         unsafe_allow_html=True,
     )
