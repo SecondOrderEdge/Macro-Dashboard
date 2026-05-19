@@ -73,8 +73,8 @@ def render(panel: pd.DataFrame, nber: pd.Series) -> None:
 
     selected = option_menu(
         menu_title=None,
-        options=["Term Structure", "By Maturity", "Spreads", "Inversions"],
-        icons=["bezier2", "search", "bar-chart-line", "exclamation-triangle"],
+        options=["Term Structure", "By Maturity", "Spreads", "Inversions", "Decomposition"],
+        icons=["bezier2", "search", "bar-chart-line", "exclamation-triangle", "diagram-3"],
         orientation="horizontal",
         default_index=0,
         key="curve_tab",
@@ -89,6 +89,8 @@ def render(panel: pd.DataFrame, nber: pd.Series) -> None:
         _render_spreads_tab(spreads, nber)
     elif selected == "Inversions":
         _render_inversions_tab(spreads, nber, stats)
+    elif selected == "Decomposition":
+        _render_decomposition_tab(panel, nber)
 
 
 # ------------------------------------------------------------------ top cards
@@ -521,6 +523,217 @@ def _interpretation(months: int, depth: float, hits: int, total: int) -> str:
 
 
 # ----------------------------------------------------------------- helpers
+
+
+# ---------------------------------------------------------------- decomposition
+
+
+def _render_decomposition_tab(panel: pd.DataFrame, nber: pd.Series) -> None:
+    """Yield surface heatmap + PCA decomposition.
+
+    The first three principal components of monthly yield *changes* explain
+    nearly all curve variation. By convention they are interpreted as
+    level (parallel shift), slope (long minus short), and curvature (belly
+    vs ends). This view shows the loadings and the historical scores so the
+    reader can answer questions like "is this a parallel shift or a steepening?"
+    """
+    yields_monthly, maturities = _yield_panel_monthly(panel)
+    if yields_monthly.empty:
+        st.info("Insufficient yield data for decomposition.")
+        return
+
+    _render_curve_heatmap(yields_monthly, maturities)
+    _render_curve_pca(yields_monthly, maturities, nber)
+
+
+def _yield_panel_monthly(panel: pd.DataFrame) -> tuple[pd.DataFrame, list[float]]:
+    """Return (yields_df, years), columns ordered by maturity in years."""
+    cols: dict[float, pd.Series] = {}
+    labels: dict[float, str] = {}
+    for label, col in _MATURITY_OPTIONS:
+        if col not in panel.columns:
+            continue
+        years = _MATURITY_YEARS[label]
+        s = panel[col].dropna().resample("ME").last()
+        if s.empty:
+            continue
+        cols[years] = s
+        labels[years] = label
+    if not cols:
+        return pd.DataFrame(), []
+    df = pd.concat(cols.values(), axis=1, keys=cols.keys())
+    df = df.sort_index(axis=1)
+    return df, list(df.columns)
+
+
+def _render_curve_heatmap(yields_monthly: pd.DataFrame, maturities: list[float]) -> None:
+    """Time × maturity heatmap of yields."""
+    st.markdown(
+        '<div class="label-small">Yield surface · maturity × time</div>',
+        unsafe_allow_html=True,
+    )
+    # Restrict to the last 25 years for readability and trim missing.
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=25)
+    df = yields_monthly.loc[yields_monthly.index >= cutoff].dropna(how="all")
+    if df.empty:
+        st.info("Not enough yield data to plot a surface.")
+        return
+
+    # Plotly expects z[y][x]: rows=maturities, cols=dates.
+    z = df.T.values
+    fig = go.Figure(
+        go.Heatmap(
+            z=z,
+            x=df.index,
+            y=[_label_for_years(y) for y in maturities],
+            colorscale=[
+                [0.0, "#1f3a4d"],
+                [0.25, "#2c5e7a"],
+                [0.5, "#d4a574"],
+                [0.75, "#c97c5d"],
+                [1.0, "#b54848"],
+            ],
+            colorbar=dict(
+                title=dict(text="Yield %", font=dict(color=PALETTE["text_muted"], size=10)),
+                tickfont=dict(color=PALETTE["text_muted"], size=9),
+                thickness=10,
+                len=0.7,
+            ),
+            hovertemplate="%{x|%b %Y}<br>%{y}: %{z:.2f}%<extra></extra>",
+        )
+    )
+    fig.update_yaxes(title="Maturity", autorange="reversed")
+    apply_template(fig, height=420, show_legend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_curve_pca(
+    yields_monthly: pd.DataFrame,
+    maturities: list[float],
+    nber: pd.Series,
+) -> None:
+    """PCA on monthly yield *changes* — level / slope / curvature."""
+    changes = yields_monthly.diff().dropna(how="any")
+    if changes.shape[0] < 60 or changes.shape[1] < 4:
+        st.info("Not enough overlapping history for PCA.")
+        return
+
+    try:
+        from sklearn.decomposition import PCA
+    except ImportError:  # pragma: no cover
+        st.info("scikit-learn not available.")
+        return
+
+    X = changes.values
+    pca = PCA(n_components=3)
+    pca.fit(X)
+    loadings = pca.components_  # shape (3, n_maturities)
+    scores = pca.transform(X)    # shape (n_periods, 3)
+    explained = pca.explained_variance_ratio_
+
+    # Orient each PC so the *current* level is interpretable. PC1: loadings should
+    # be predominantly positive (level shift up). PC2: long-end positive vs short-end
+    # negative (steepening). PC3: belly positive (curvature).
+    if loadings[0].mean() < 0:
+        loadings[0] *= -1
+        scores[:, 0] *= -1
+    if loadings[1, -1] - loadings[1, 0] < 0:
+        loadings[1] *= -1
+        scores[:, 1] *= -1
+
+    pc_labels = ["Level (PC1)", "Slope (PC2)", "Curvature (PC3)"]
+    pc_colors = [PALETTE["accent"], PALETTE["submodel"]["labor"], PALETTE["submodel"]["sentiment"]]
+
+    # --- Loadings chart ----------------------------------------------------
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">PCA loadings · how each maturity weights into each component</div>',
+        unsafe_allow_html=True,
+    )
+    fig_load = go.Figure()
+    mat_labels = [_label_for_years(y) for y in maturities]
+    for i, name in enumerate(pc_labels):
+        fig_load.add_trace(
+            go.Bar(
+                x=mat_labels,
+                y=loadings[i],
+                name=f"{name} · {explained[i]:.0%}",
+                marker=dict(color=pc_colors[i], line=dict(width=0)),
+                hovertemplate=f"{name}<br>%{{x}}: %{{y:+.3f}}<extra></extra>",
+            )
+        )
+    fig_load.update_yaxes(title="Loading")
+    fig_load.update_xaxes(title="Maturity")
+    apply_template(fig_load, height=320)
+    st.plotly_chart(fig_load, use_container_width=True)
+
+    # --- Scores over time (cumulative for interpretability) ---------------
+    st.markdown(
+        '<div class="label-small" style="margin-top:8px;">Component scores · cumulative move since sample start</div>',
+        unsafe_allow_html=True,
+    )
+    scores_df = pd.DataFrame(scores, index=changes.index, columns=pc_labels).cumsum()
+    fig_scores = go.Figure()
+    for i, name in enumerate(pc_labels):
+        fig_scores.add_trace(
+            go.Scatter(
+                x=scores_df.index, y=scores_df[name], mode="lines",
+                line=dict(color=pc_colors[i], width=1.4),
+                name=name,
+                hovertemplate=f"{name}<br>%{{x|%b %Y}}: %{{y:+.2f}}<extra></extra>",
+            )
+        )
+    add_recession_shading(fig_scores, nber)
+    fig_scores.update_yaxes(title="Cumulative score")
+    apply_template(fig_scores, height=360)
+    st.plotly_chart(fig_scores, use_container_width=True)
+
+    # --- Interpretation panel --------------------------------------------
+    last_year = changes.loc[changes.index >= (changes.index.max() - pd.DateOffset(years=1))]
+    if not last_year.empty:
+        yr_scores = pca.transform(last_year.values).sum(axis=0)
+        # Re-orient consistently with our adjusted loadings
+        if loadings[0].mean() < 0:  # already flipped above; reuse
+            pass
+        cum = scores_df.iloc[-1] - scores_df.iloc[max(0, len(scores_df) - 13)]
+        dom_idx = int(np.argmax(np.abs(cum.values)))
+        dom_label = pc_labels[dom_idx]
+        verdict = {
+            0: ("a parallel shift" if cum.values[0] > 0 else "a parallel down-shift"),
+            1: ("steepening" if cum.values[1] > 0 else "flattening"),
+            2: ("curvature increasing (belly outperforming)" if cum.values[2] > 0 else "curvature decreasing (belly underperforming)"),
+        }[dom_idx]
+        st.markdown(
+            f'<div class="panel"><div class="panel-header"><span>Read</span></div>'
+            f'<div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+            f"Over the last 12 months the dominant move in the curve has been <b>{verdict}</b> "
+            f"(the {dom_label} component accumulated {cum.values[dom_idx]:+.2f}). "
+            f"The three components jointly explain {sum(explained):.0%} of monthly yield variance "
+            f"(level {explained[0]:.0%}, slope {explained[1]:.0%}, curvature {explained[2]:.0%})."
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _label_for_years(years: float) -> str:
+    for label, y in _MATURITY_YEARS.items():
+        if abs(y - years) < 1e-6:
+            return label
+    return f"{years:.1f}Y"
+
+
+_MATURITY_YEARS: dict[str, float] = {
+    "1 Month": 1 / 12,
+    "3 Month": 0.25,
+    "6 Month": 0.5,
+    "1 Year": 1.0,
+    "2 Year": 2.0,
+    "3 Year": 3.0,
+    "5 Year": 5.0,
+    "7 Year": 7.0,
+    "10 Year": 10.0,
+    "20 Year": 20.0,
+    "30 Year": 30.0,
+}
 
 
 def _asof(series: pd.Series, ts: pd.Timestamp) -> float:
