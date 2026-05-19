@@ -131,26 +131,24 @@ def metric_card(
     Pass an SVG string for ``sparkline_html`` (see :func:`sparkline_svg`).
     """
     color = risk_color_hex or PALETTE["text_primary"]
-    badge_html = ""
-    if badge:
-        badge_html = f'<span class="risk-badge" style="color:{color};margin-left:8px;">{escape(badge)}</span>'
+    badge_html = (
+        f'<span class="risk-badge" style="color:{color};margin-left:8px;">{escape(badge)}</span>'
+        if badge else ""
+    )
     subline_html = f'<div class="metric-sub">{escape(subline)}</div>' if subline else ""
     spark_html = f'<div style="margin-top:12px;">{sparkline_html}</div>' if sparkline_html else ""
     unit_html = f'<span class="metric-unit">{escape(unit)}</span>' if unit else ""
 
-    return f"""
-<div class="panel" style="height:100%;">
-  <div class="panel-header">
-    <span>{escape(label)}</span>
-    {badge_html}
-  </div>
-  <div class="panel-body">
-    <div class="metric-big data-font" style="color:{color};">{escape(value)}{unit_html}</div>
-    {subline_html}
-    {spark_html}
-  </div>
-</div>
-"""
+    # Important: keep this single-line. Streamlit's markdown renderer treats
+    # 4-space-indented lines as code blocks, which breaks raw HTML embedding.
+    return (
+        f'<div class="panel" style="height:100%;">'
+        f'<div class="panel-header"><span>{escape(label)}</span>{badge_html}</div>'
+        f'<div class="panel-body">'
+        f'<div class="metric-big data-font" style="color:{color};">{escape(value)}{unit_html}</div>'
+        f'{subline_html}{spark_html}'
+        f'</div></div>'
+    )
 
 
 def sparkline_svg(
