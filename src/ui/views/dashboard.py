@@ -1,4 +1,4 @@
-"""Cockpit view — top-level dashboard combining all three modules."""
+"""Dashboard view — top-level page combining all three modules."""
 
 from __future__ import annotations
 
@@ -52,19 +52,19 @@ def _row_one(current: dict, history: pd.DataFrame, lame_hist: pd.Series, spreads
     with cols[0]:
         _recession_card(current, history)
         if st.button("Drill into Recession →", key="drill_recession"):
-            st.session_state.view = "Recession"
+            st.session_state.pending_nav = "Recession"
             st.rerun()
 
     with cols[1]:
         _lame_card(lame_hist)
-        if st.button("Drill into LAME →", key="drill_lame"):
-            st.session_state.view = "LAME · Labor"
+        if st.button("Drill into Labor →", key="drill_lame"):
+            st.session_state.pending_nav = "Labor"
             st.rerun()
 
     with cols[2]:
         _curve_card(spreads)
         if st.button("Drill into Curve →", key="drill_curve"):
-            st.session_state.view = "Yield Curve"
+            st.session_state.pending_nav = "Yield Curve"
             st.rerun()
 
 
@@ -111,7 +111,7 @@ def _recession_card(current: dict, history: pd.DataFrame) -> None:
 
 def _lame_card(lame_hist: pd.Series) -> None:
     if lame_hist.empty:
-        st.markdown(metric_card("LAME", "—", "σ"), unsafe_allow_html=True)
+        st.markdown(metric_card("Labor Composite", "—", "σ"), unsafe_allow_html=True)
         return
     val = float(lame_hist.iloc[-1])
     color = (
@@ -124,7 +124,7 @@ def _lame_card(lame_hist: pd.Series) -> None:
     spark = sparkline_svg(lame_hist.tail(120).values, color=color)
     st.markdown(
         metric_card(
-            label="LAME · Labor",
+            label="Labor Composite",
             value=f"{val:+.2f}",
             unit="σ",
             risk_color_hex=color,
@@ -193,10 +193,10 @@ def _row_two(
         s = lame_hist.loc[lame_hist.index >= cutoff]
         fig.add_trace(
             go.Scatter(
-                x=s.index, y=s.values, mode="lines", name="LAME (σ)",
+                x=s.index, y=s.values, mode="lines", name="Labor (σ)",
                 line=dict(color=PALETTE["submodel"]["labor"], width=1.2),
                 yaxis="y2",
-                hovertemplate="%{x|%b %Y}<br>%{y:+.2f}σ<extra>LAME</extra>",
+                hovertemplate="%{x|%b %Y}<br>%{y:+.2f}σ<extra>Labor</extra>",
             )
         )
 
@@ -215,7 +215,7 @@ def _row_two(
     add_recession_shading(fig, nber.loc[nber.index >= cutoff])
     fig.update_layout(
         yaxis=dict(title="Recession probability (%)", side="left", range=[0, 100]),
-        yaxis2=dict(title="LAME (σ) · spread (pp)", overlaying="y", side="right", showgrid=False),
+        yaxis2=dict(title="Labor (σ) · spread (pp)", overlaying="y", side="right", showgrid=False),
     )
     apply_template(fig, height=380)
     st.plotly_chart(fig, use_container_width=True)
@@ -227,7 +227,7 @@ def _row_three(ensemble_now, lame_now, curve_now, composite, current) -> None:
     with left:
         rows = [
             ("Recession ensemble (50%)", f"{ensemble_now:.0f}%", PALETTE["accent"]),
-            ("LAME-risk (25%)", f"{composite['contributions'].get('lame', 0)*4:.0f} → {composite['contributions'].get('lame', 0):.0f} pts", PALETTE["submodel"]["labor"]),
+            ("Labor-risk (25%)", f"{composite['contributions'].get('lame', 0)*4:.0f} → {composite['contributions'].get('lame', 0):.0f} pts", PALETTE["submodel"]["labor"]),
             ("Curve-risk (25%)", f"{composite['contributions'].get('curve', 0)*4:.0f} → {composite['contributions'].get('curve', 0):.0f} pts", PALETTE["submodel"]["yield_curve"]),
             ("Composite", f"{composite['composite']} · {composite['band']}", risk_color(composite["band"])),
         ]
@@ -270,12 +270,12 @@ def _todays_read(ensemble_now: float, lame_now: float, curve_now: float, current
     if np.isfinite(lame_now):
         if lame_now < -0.5:
             parts.append(
-                f"Labor (LAME) is contractionary at {lame_now:+.2f}σ — "
+                f"Labor is contractionary at {lame_now:+.2f}σ — "
                 "the soft-landing thesis is on thinner ice."
             )
         else:
             parts.append(
-                f"Labor (LAME) reads {lame_now:+.2f}σ, broadly consistent with continued expansion."
+                f"Labor reads {lame_now:+.2f}σ, broadly consistent with continued expansion."
             )
     if not parts:
         parts.append("Not enough data is available to form a reading.")

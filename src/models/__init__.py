@@ -1,4 +1,4 @@
-"""Quant models powering the cockpit."""
+"""Quant models powering the dashboard."""
 
 from .composite import composite_risk, curve_to_risk, lame_to_risk
 from .lame import LAME

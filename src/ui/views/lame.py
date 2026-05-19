@@ -33,7 +33,7 @@ def render(panel: pd.DataFrame, nber: pd.Series, model: LAME | None = None) -> N
         model.compute(panel)
     history = model.history()
     if history.empty:
-        st.warning("Insufficient labor data for LAME.")
+        st.warning("Insufficient labor data.")
         return
 
     _render_top(history, model, nber)
@@ -51,7 +51,7 @@ def _render_top(history: pd.Series, model: LAME, nber: pd.Series) -> None:
         subline = f"as of {history.index[-1].strftime('%b %Y')}"
         st.markdown(
             metric_card(
-                label="LAME Composite",
+                label="Labor Composite",
                 value=f"{latest:+.2f}",
                 unit="σ",
                 risk_color_hex=color,
@@ -75,7 +75,7 @@ def _render_top(history: pd.Series, model: LAME, nber: pd.Series) -> None:
 
     with right:
         fig = line_chart(
-            history.rename("LAME"),
+            history.rename("Labor"),
             color=color,
             height=380,
             nber=nber,

@@ -1,4 +1,4 @@
-"""Single source of truth for the FRED series the cockpit uses.
+"""Single source of truth for the FRED series the dashboard uses.
 
 Each entry carries the FRED ID, native frequency, the transform applied
 before z-scoring or regression, and (for labor indicators) the sign

@@ -1,4 +1,4 @@
-"""Macro Risk Cockpit — Streamlit entry point."""
+"""Macro Dashboard — Streamlit entry point."""
 
 from __future__ import annotations
 
@@ -16,16 +16,18 @@ from src.models.lame import LAME
 from src.models.recession_ensemble import RecessionEnsemble
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
-from src.ui.views import cockpit, curve, recession
+from src.ui.views import curve, dashboard, methodology, recession
 from src.ui.views import lame as lame_view
 
 
 st.set_page_config(
-    page_title="Macro Risk Cockpit",
+    page_title="Macro Dashboard",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+NAV_OPTIONS = ["Macro Dashboard", "Recession", "Labor", "Yield Curve", "Methodology"]
 
 inject_theme()
 
@@ -95,32 +97,42 @@ def _header(models: dict | None) -> None:
             composite_html = ""
 
     st.markdown(
-        f"""
-<div class="cockpit-header">
-  <div>
-    <div class="cockpit-title">Macro Risk Cockpit</div>
-    <div class="cockpit-subtitle">U.S. recession risk · {timestamp}</div>
-  </div>
-  {composite_html}
-</div>
-""",
+        (
+            '<div class="dashboard-header">'
+            '<div>'
+            '<div class="dashboard-title">Macro Dashboard</div>'
+            f'<div class="dashboard-subtitle">U.S. recession risk · {timestamp}</div>'
+            '</div>'
+            f'{composite_html}'
+            '</div>'
+        ),
         unsafe_allow_html=True,
     )
 
 
 def _nav() -> str:
+    """Top navigation. Drill-down buttons set ``pending_nav`` then rerun; we
+    consume it here via ``manual_select`` so streamlit-option-menu actually
+    moves its selection (its internal session state otherwise sticks)."""
     if "view" not in st.session_state:
-        st.session_state.view = "Cockpit"
+        st.session_state.view = NAV_OPTIONS[0]
 
-    options = ["Cockpit", "Recession", "LAME · Labor", "Yield Curve"]
-    default_index = options.index(st.session_state.view) if st.session_state.view in options else 0
+    manual_select = None
+    if "pending_nav" in st.session_state:
+        target = st.session_state.pop("pending_nav")
+        if target in NAV_OPTIONS:
+            manual_select = NAV_OPTIONS.index(target)
+            st.session_state.view = target
+
+    default_index = NAV_OPTIONS.index(st.session_state.view) if st.session_state.view in NAV_OPTIONS else 0
 
     selected = option_menu(
         menu_title=None,
-        options=options,
-        icons=["grid", "graph-down", "people", "activity"],
+        options=NAV_OPTIONS,
+        icons=["grid", "graph-down", "people", "activity", "book"],
         orientation="horizontal",
         default_index=default_index,
+        manual_select=manual_select,
         key="nav",
         styles={
             "container": {"background-color": "#0a0d12", "padding": "0"},
@@ -160,14 +172,16 @@ def main() -> None:
     _header(models)
     selected = _nav()
 
-    if selected == "Cockpit":
-        cockpit.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
+    if selected == "Macro Dashboard":
+        dashboard.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
         recession.render(models["ensemble"], models["nber"])
-    elif selected == "LAME · Labor":
+    elif selected == "Labor":
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":
         curve.render(models["panel"], models["nber"])
+    elif selected == "Methodology":
+        methodology.render(models["ensemble"])
 
     st.markdown(
         f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'
