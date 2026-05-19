@@ -44,6 +44,7 @@ def render(
     _row_one(current, history, lame_hist, spreads)
     _row_two(history, lame_hist, spreads, nber)
     _row_three(ensemble_now, lame_now, curve_now, composite, current)
+    _row_four_analogues(history, lame_hist, spreads, nber, ensemble_now, lame_now, curve_now)
 
 
 def _row_one(current: dict, history: pd.DataFrame, lame_hist: pd.Series, spreads: pd.DataFrame) -> None:
@@ -280,3 +281,110 @@ def _todays_read(ensemble_now: float, lame_now: float, curve_now: float, current
     if not parts:
         parts.append("Not enough data is available to form a reading.")
     return " ".join(parts)
+
+
+# --------------------------------------------------------- historical analogues
+
+
+def _row_four_analogues(
+    history: pd.DataFrame,
+    lame_hist: pd.Series,
+    spreads: pd.DataFrame,
+    nber: pd.Series,
+    ensemble_now: float,
+    lame_now: float,
+    curve_now: float,
+) -> None:
+    """Top-N historical dates most similar to today, plus what came next.
+
+    Similarity is Euclidean distance in (ensemble, labor, 10Y-3M) space after
+    each series is z-scored against its own history — so all three are on a
+    comparable scale. For each analogue date we look up the realized outcome
+    in the following 12 months: peak ensemble probability and whether any
+    NBER recession month occurred in that window.
+    """
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">Historical analogues · '
+        'when the dashboard last looked like today</div>',
+        unsafe_allow_html=True,
+    )
+
+    ensemble_hist = history["ensemble"].dropna() if "ensemble" in history.columns else pd.Series(dtype=float)
+    curve_hist = spreads["spread_10y3m"].dropna() if "spread_10y3m" in spreads.columns else pd.Series(dtype=float)
+
+    # Align all three on a common monthly index.
+    ensemble_m = ensemble_hist.copy()
+    ensemble_m.index = pd.DatetimeIndex(ensemble_m.index).to_period("M").to_timestamp()
+    labor_m = lame_hist.copy()
+    labor_m.index = pd.DatetimeIndex(labor_m.index).to_period("M").to_timestamp()
+    curve_m = curve_hist.resample("ME").last() if not curve_hist.empty else curve_hist
+    curve_m.index = pd.DatetimeIndex(curve_m.index).to_period("M").to_timestamp()
+
+    df = pd.concat(
+        [ensemble_m.rename("ensemble"), labor_m.rename("labor"), curve_m.rename("curve_10y3m")],
+        axis=1,
+    ).dropna()
+
+    if df.empty:
+        st.info("Not enough overlapping history for analogue search.")
+        return
+
+    # Standardise each column against its own full sample, then compute the
+    # Euclidean distance to today's standardised triplet.
+    means = df.mean()
+    stds = df.std().replace(0, 1.0)
+    standardised = (df - means) / stds
+    today_std = pd.Series(
+        {
+            "ensemble": (ensemble_now - means["ensemble"]) / stds["ensemble"],
+            "labor": (lame_now - means["labor"]) / stds["labor"],
+            "curve_10y3m": (curve_now - means["curve_10y3m"]) / stds["curve_10y3m"],
+        }
+    )
+    distances = np.sqrt(((standardised - today_std) ** 2).sum(axis=1))
+
+    # Exclude dates within 24 months of today, plus the today row itself, so
+    # we get genuinely different historical regimes.
+    excluded = distances.index >= (distances.index.max() - pd.DateOffset(months=24))
+    candidates = distances[~excluded].sort_values().head(5)
+    if candidates.empty:
+        st.info("Not enough non-recent history to surface analogues.")
+        return
+
+    # Outcomes: max ensemble in next 12m, did NBER recession occur?
+    nber_monthly = nber.copy()
+    nber_monthly.index = pd.DatetimeIndex(nber_monthly.index).to_period("M").to_timestamp()
+
+    rows = []
+    for ts, dist in candidates.items():
+        snap = df.loc[ts]
+        end_ts = ts + pd.DateOffset(months=12)
+        next12_ensemble = ensemble_m.loc[(ensemble_m.index > ts) & (ensemble_m.index <= end_ts)]
+        peak = float(next12_ensemble.max()) if not next12_ensemble.empty else float("nan")
+        nber_window = nber_monthly.loc[(nber_monthly.index > ts) & (nber_monthly.index <= end_ts)]
+        rec_in_12m = bool(nber_window.any()) if not nber_window.empty else False
+        rows.append(
+            {
+                "date": ts.strftime("%b %Y"),
+                "distance": f"{dist:.2f}",
+                "ensemble": f"{snap['ensemble']:.0f}%",
+                "labor (σ)": f"{snap['labor']:+.2f}",
+                "10Y−3M (pp)": f"{snap['curve_10y3m']:+.2f}",
+                "peak ensemble next 12m": f"{peak:.0f}%" if np.isfinite(peak) else "—",
+                "NBER recession in next 12m": "YES" if rec_in_12m else "no",
+            }
+        )
+
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    # Verdict
+    hit_count = sum(1 for r in rows if r["NBER recession in next 12m"] == "YES")
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        f"Of the five closest historical analogues to today's reading, "
+        f"<b>{hit_count} of 5</b> were followed by an NBER recession within twelve months. "
+        "Analogue distance is Euclidean in standardised (ensemble probability, labor σ, 10Y−3M spread) space "
+        "and excludes dates within the last 24 months so the comparison surfaces genuinely earlier regimes."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
