@@ -373,12 +373,20 @@ def _render_small_multiples(model: LAME, nber: pd.Series) -> None:
     )
     fig.update_xaxes(showgrid=False, color="#6b7280", tickfont=dict(size=8))
     fig.update_yaxes(gridcolor="#1f2630", zerolinecolor="#3d4754", color="#6b7280", tickfont=dict(size=8))
-    # Subplot title styling
-    for ann in fig["layout"]["annotations"]:
-        if ann.get("text") in cols:
-            ann["font"] = dict(family="JetBrains Mono", color=PALETTE["accent"], size=10)
-            ann["xanchor"] = "left"
-            ann["x"] = 0.0
+    # Subplot title styling. fig.layout.annotations is a tuple of plotly
+    # Annotation objects which support attribute access but not .get(); use
+    # try/except so any layout-side annotation we didn't expect is skipped.
+    for ann in fig.layout.annotations:
+        try:
+            text = ann.text
+        except AttributeError:
+            continue
+        if text in cols:
+            ann.update(
+                font=dict(family="JetBrains Mono", color=PALETTE["accent"], size=10),
+                xanchor="left",
+                x=0.0,
+            )
     st.plotly_chart(fig, use_container_width=True)
 
 
