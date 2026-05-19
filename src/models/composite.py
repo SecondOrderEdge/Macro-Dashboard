@@ -1,6 +1,6 @@
 """Composite top-level risk score.
 
-The cockpit headline collapses three indicators into a single 0–100 number:
+The dashboard headline collapses three indicators into a single 0–100 number:
 
 * the recession ensemble probability (already in percent),
 * the LAME labor composite (z-score, lower is worse),

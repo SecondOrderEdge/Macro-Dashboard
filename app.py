@@ -1,4 +1,4 @@
-"""Macro Risk Cockpit — Streamlit entry point."""
+"""Macro Dashboard — Streamlit entry point."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from src.models.lame import LAME
 from src.models.recession_ensemble import RecessionEnsemble
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
-from src.ui.views import cockpit, curve, methodology, recession
+from src.ui.views import curve, dashboard, methodology, recession
 from src.ui.views import lame as lame_view
 
 
@@ -98,10 +98,10 @@ def _header(models: dict | None) -> None:
 
     st.markdown(
         (
-            '<div class="cockpit-header">'
+            '<div class="dashboard-header">'
             '<div>'
-            '<div class="cockpit-title">Macro Dashboard</div>'
-            f'<div class="cockpit-subtitle">U.S. recession risk · {timestamp}</div>'
+            '<div class="dashboard-title">Macro Dashboard</div>'
+            f'<div class="dashboard-subtitle">U.S. recession risk · {timestamp}</div>'
             '</div>'
             f'{composite_html}'
             '</div>'
@@ -173,7 +173,7 @@ def main() -> None:
     selected = _nav()
 
     if selected == "Macro Dashboard":
-        cockpit.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
+        dashboard.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
         recession.render(models["ensemble"], models["nber"])
     elif selected == "Labor":

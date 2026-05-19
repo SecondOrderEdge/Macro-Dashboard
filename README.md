@@ -1,4 +1,4 @@
-# Macro Risk Cockpit
+# Macro Dashboard
 
 > A unified view of U.S. recession risk through three independent macro lenses.
 
@@ -12,7 +12,7 @@
 
 A single-indicator recession model gives you a precise number and the false comfort of a precise number. The 10-year/3-month yield curve has the best track record of any single signal in the post-war U.S. sample, and it has nonetheless run hot for stretches when the rest of the economy was demonstrably fine. Street estimates routinely disagree by twenty or thirty percentage points without disclosing what is driving the spread.
 
-The cockpit responds with three independent lenses that can disagree readably. A 5-submodel probit ensemble covers 41 FRED series across yield curve, labor, credit, housing, and sentiment. A 10-indicator labor composite (LAME) summarises the regime in a single inverse-volatility-weighted z-score. A yield-curve module exposes the term structure and inversion statistics directly. The headline is a 0–100 composite built from a 50/25/25 weighted blend.
+The dashboard responds with three independent lenses that can disagree readably. A 5-submodel probit ensemble covers 41 FRED series across yield curve, labor, credit, housing, and sentiment. A 10-indicator labor composite (LAME) summarises the regime in a single inverse-volatility-weighted z-score. A yield-curve module exposes the term structure and inversion statistics directly. The headline is a 0–100 composite built from a 50/25/25 weighted blend.
 
 What's novel — for a public dashboard — is the transparent decomposition. Every cell of the headline can be opened: each submodel reports its probability, each retained feature reports its marginal contribution in percentage points, and the LAME breakdown shows the z-score, weight, and contribution of each of its ten indicators. When this model disagrees with the Street, the disagreement is auditable.
 
@@ -41,8 +41,8 @@ Brier score and AUC are reported live in the *Under the Hood* tab of the recessi
 ## Quick start
 
 ```bash
-git clone https://github.com/SecondOrderEdge/macro-cockpit.git
-cd macro-cockpit
+git clone https://github.com/SecondOrderEdge/Macro-Dashboard.git
+cd Macro-Dashboard
 pip install -r requirements.txt
 cp .env.example .env
 # Add your FRED_API_KEY to .env — free key at https://fred.stlouisfed.org/docs/api/api_key.html

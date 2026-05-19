@@ -1,4 +1,4 @@
-"""Cockpit view — top-level dashboard combining all three modules."""
+"""Dashboard view — top-level page combining all three modules."""
 
 from __future__ import annotations
 
