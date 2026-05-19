@@ -1,0 +1,182 @@
+"""Macro Risk Cockpit — Streamlit entry point."""
+
+from __future__ import annotations
+
+import datetime as dt
+
+import pandas as pd
+import streamlit as st
+from streamlit_option_menu import option_menu
+
+from src.data.fred_client import fetch_panel
+from src.data.nber import load_nber_recessions, recession_in_next_12m
+from src.data.series_registry import fred_ids
+from src.models.composite import composite_risk
+from src.models.lame import LAME
+from src.models.recession_ensemble import RecessionEnsemble
+from src.models.yield_curve import YieldCurve
+from src.ui.theme import PALETTE, inject_theme, risk_color
+from src.ui.views import cockpit, curve, recession
+from src.ui.views import lame as lame_view
+
+
+st.set_page_config(
+    page_title="Macro Risk Cockpit",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+inject_theme()
+
+
+# --------------------------------------------------------------------- caching
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_panel() -> pd.DataFrame:
+    return fetch_panel(fred_ids(), start="1959-01-01")
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_nber() -> pd.Series:
+    return load_nber_recessions()
+
+
+@st.cache_resource(show_spinner=False)
+def _build_models(_panel_id: str) -> dict:
+    """Build (fit) the three models. `_panel_id` is a hash to bust the cache."""
+    panel = _load_panel()
+    nber = _load_nber()
+    fwd = recession_in_next_12m(nber)
+
+    ensemble = RecessionEnsemble()
+    ensemble.fit(panel, fwd)
+
+    lame = LAME()
+    lame.compute(panel)
+
+    yc = YieldCurve(panel)
+    return {"ensemble": ensemble, "lame": lame, "yield_curve": yc, "panel": panel, "nber": nber}
+
+
+# ------------------------------------------------------------------------- run
+
+
+def _composite_now(models: dict) -> dict:
+    panel = models["panel"]
+    ensemble_now = float(models["ensemble"].predict_current()["ensemble"])
+    lame_hist = models["lame"].history()
+    lame_now = float(lame_hist.iloc[-1]) if not lame_hist.empty else float("nan")
+    spreads = models["yield_curve"].spreads_history()
+    curve_now = (
+        float(spreads["spread_10y3m"].dropna().iloc[-1])
+        if "spread_10y3m" in spreads.columns and not spreads["spread_10y3m"].dropna().empty
+        else float("nan")
+    )
+    return composite_risk(ensemble_now, lame_now, curve_now)
+
+
+def _header(models: dict | None) -> None:
+    timestamp = dt.datetime.now().strftime("%Y-%m-%d · %H:%M UTC")
+    composite_html = ""
+    if models is not None:
+        try:
+            comp = _composite_now(models)
+            color = risk_color(comp["band"])
+            composite_html = (
+                f'<div class="composite-readout">'
+                f'<div class="label-tiny">Composite Risk</div>'
+                f'<div class="composite-number" style="color:{color};">{comp["composite"]}</div>'
+                f'<div class="risk-badge" style="color:{color};margin-top:6px;">{comp["band"]}</div>'
+                f"</div>"
+            )
+        except Exception:
+            composite_html = ""
+
+    st.markdown(
+        f"""
+<div class="cockpit-header">
+  <div>
+    <div class="cockpit-title">Macro Risk Cockpit</div>
+    <div class="cockpit-subtitle">U.S. recession risk · {timestamp}</div>
+  </div>
+  {composite_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _nav() -> str:
+    if "view" not in st.session_state:
+        st.session_state.view = "Cockpit"
+
+    options = ["Cockpit", "Recession", "LAME · Labor", "Yield Curve"]
+    default_index = options.index(st.session_state.view) if st.session_state.view in options else 0
+
+    selected = option_menu(
+        menu_title=None,
+        options=options,
+        icons=["grid", "graph-down", "people", "activity"],
+        orientation="horizontal",
+        default_index=default_index,
+        key="nav",
+        styles={
+            "container": {"background-color": "#0a0d12", "padding": "0"},
+            "nav-link": {
+                "font-size": "11px",
+                "letter-spacing": "0.15em",
+                "text-transform": "uppercase",
+                "color": "#6b7280",
+                "background-color": "transparent",
+                "padding": "10px 18px",
+            },
+            "nav-link-selected": {
+                "color": "#d4a574",
+                "background-color": "transparent",
+                "border-bottom": "2px solid #d4a574",
+            },
+            "icon": {"display": "none"},
+        },
+    )
+    st.session_state.view = selected
+    return selected
+
+
+def main() -> None:
+    try:
+        with st.spinner("Loading FRED data…"):
+            models = _build_models("v1")
+    except Exception as exc:
+        _header(None)
+        _nav()
+        st.error(
+            f"Failed to initialise the dashboard: {exc}. "
+            "Make sure FRED_API_KEY is set in `.env` or `.streamlit/secrets.toml`."
+        )
+        return
+
+    _header(models)
+    selected = _nav()
+
+    if selected == "Cockpit":
+        cockpit.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
+    elif selected == "Recession":
+        recession.render(models["ensemble"], models["nber"])
+    elif selected == "LAME · Labor":
+        lame_view.render(models["panel"], models["nber"], models["lame"])
+    elif selected == "Yield Curve":
+        curve.render(models["panel"], models["nber"])
+
+    st.markdown(
+        f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'
+        f'color:{PALETTE["text_tiny"]};font-size:10px;letter-spacing:0.2em;text-transform:uppercase;">'
+        "Data · FRED  ·  Recession dates · NBER  ·  This is research, not investment advice."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

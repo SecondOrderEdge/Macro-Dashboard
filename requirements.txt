@@ -1,0 +1,9 @@
+streamlit>=1.30
+streamlit-option-menu>=0.3
+fredapi>=0.5
+statsmodels>=0.14
+pandas>=2.0
+numpy>=1.26
+plotly>=5.18
+python-dotenv>=1.0
+scikit-learn>=1.3
