@@ -159,7 +159,10 @@ def _nav() -> str:
 def main() -> None:
     try:
         with st.spinner("Loading FRED data…"):
-            models = _build_models("v1")
+            # Bump this version string whenever model code changes — Streamlit's
+            # cache_resource doesn't track imported modules, so a code edit to
+            # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
+            models = _build_models("v2-labor-reference-date")
     except Exception as exc:
         _header(None)
         _nav()

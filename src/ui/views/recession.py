@@ -150,6 +150,151 @@ def _render_under_hood(model: RecessionEnsemble, current: dict, history: pd.Data
             unsafe_allow_html=True,
         )
 
+    _render_submodel_divergence(history)
+    _render_rolling_brier(model, history)
+
+
+def _render_submodel_divergence(history: pd.DataFrame) -> None:
+    """Show the spread (max minus min) of submodel probabilities over time.
+
+    A tight spread means all five lenses agree; a wide spread means the
+    ensemble is hedging across material disagreement. Wide spreads
+    historically precede regime shifts — they're a signal of fragility, not
+    just noise.
+    """
+    submodel_cols = [c for c in history.columns if c != "ensemble"]
+    if not submodel_cols:
+        return
+    sub = history[submodel_cols].dropna(how="all")
+    if sub.empty:
+        return
+
+    high = sub.max(axis=1)
+    low = sub.min(axis=1)
+    spread = (high - low).dropna()
+    ensemble = history["ensemble"].dropna() if "ensemble" in history.columns else pd.Series(dtype=float)
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">Submodel divergence · range across the 5 lenses</div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = go.Figure()
+    # Filled max/min band
+    fig.add_trace(
+        go.Scatter(
+            x=high.index, y=high.values, mode="lines",
+            line=dict(color=PALETTE["text_tiny"], width=0),
+            name="max submodel", hoverinfo="skip", showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=low.index, y=low.values, mode="lines",
+            line=dict(color=PALETTE["text_tiny"], width=0),
+            fill="tonexty", fillcolor=_fade(PALETTE["text_muted"], 0.20),
+            name="submodel range",
+            hovertemplate="%{x|%b %Y}<extra>range</extra>",
+        )
+    )
+    if not ensemble.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=ensemble.index, y=ensemble.values, mode="lines",
+                line=dict(color=PALETTE["accent"], width=1.6),
+                name="Ensemble",
+                hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>Ensemble</extra>",
+            )
+        )
+    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
+    apply_template(fig, height=320)
+    st.plotly_chart(fig, use_container_width=True)
+
+    latest_spread = float(spread.iloc[-1]) if not spread.empty else float("nan")
+    median_spread = float(spread.median()) if not spread.empty else float("nan")
+    p90_spread = float(spread.quantile(0.9)) if not spread.empty else float("nan")
+    verdict = (
+        "Submodels are in broad agreement — the ensemble reading is high-conviction."
+        if latest_spread < median_spread else
+        "Submodels disagree by more than the historical median — read the ensemble cautiously."
+        if latest_spread < p90_spread else
+        "Submodel disagreement is in the top decile of history — the ensemble is hedging across very different signals."
+    )
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        f"Current spread (max − min): <b>{latest_spread:.0f}pp</b>. "
+        f"Historical median: {median_spread:.0f}pp · 90th percentile: {p90_spread:.0f}pp. {verdict}"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_rolling_brier(model: RecessionEnsemble, history: pd.DataFrame) -> None:
+    """Rolling 10-year Brier vs the unconditional base-rate baseline."""
+    target = getattr(model, "_target", None)
+    if target is None or "ensemble" not in history.columns:
+        return
+    pred = (history["ensemble"] / 100.0).dropna()
+    y = target.astype(float)
+    aligned = pd.concat([pred.rename("p"), y.rename("y")], axis=1).dropna()
+    if len(aligned) < 120:
+        return
+
+    err = (aligned["p"] - aligned["y"]) ** 2
+    rolling_brier = err.rolling(120, min_periods=60).mean()
+
+    # Baseline: at each date, predict the in-window base rate.
+    rolling_base_rate = aligned["y"].rolling(120, min_periods=60).mean()
+    baseline_err = (rolling_base_rate - aligned["y"]) ** 2
+    rolling_baseline = baseline_err.rolling(120, min_periods=60).mean()
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">Rolling 10-year Brier score · ensemble vs unconditional base-rate baseline</div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=rolling_baseline.index, y=rolling_baseline.values, mode="lines",
+            line=dict(color=PALETTE["text_muted"], width=1.0, dash="dot"),
+            name="Base-rate baseline",
+            hovertemplate="%{x|%b %Y}<br>%{y:.4f}<extra>baseline</extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=rolling_brier.index, y=rolling_brier.values, mode="lines",
+            line=dict(color=PALETTE["accent"], width=1.4),
+            name="Ensemble Brier",
+            hovertemplate="%{x|%b %Y}<br>%{y:.4f}<extra>ensemble</extra>",
+        )
+    )
+    fig.update_yaxes(title="Brier (lower = better)")
+    apply_template(fig, height=320)
+    st.plotly_chart(fig, use_container_width=True)
+
+    latest_brier = float(rolling_brier.dropna().iloc[-1]) if rolling_brier.dropna().size else float("nan")
+    latest_base = float(rolling_baseline.dropna().iloc[-1]) if rolling_baseline.dropna().size else float("nan")
+    if np.isfinite(latest_brier) and np.isfinite(latest_base):
+        skill = (1 - latest_brier / latest_base) * 100
+        st.markdown(
+            f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+            f"In the most recent 10-year window the ensemble's Brier is <b>{latest_brier:.4f}</b> vs "
+            f"<b>{latest_base:.4f}</b> for an unconditional base-rate forecaster — a <b>{skill:+.0f}%</b> "
+            "skill score relative to the no-information baseline. Persistent dips below the dotted line "
+            "indicate windows in which the ensemble materially out-predicted the base rate; periods "
+            "where the two lines converge are windows in which forecastable structure was weaker."
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _fade(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 
 # ----------------------------------------------------------------- The Reading
 
