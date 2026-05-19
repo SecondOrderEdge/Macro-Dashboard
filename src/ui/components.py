@@ -304,6 +304,101 @@ def reliability_diagram(curve: pd.DataFrame) -> go.Figure:
     return apply_template(fig, height=300, show_legend=False)
 
 
+def distribution_chart(
+    series: pd.Series,
+    *,
+    today_value: float | None = None,
+    bins: int = 60,
+    color: str | None = None,
+    today_color: str | None = None,
+    height: int = 320,
+    xaxis_title: str | None = None,
+    conditional: pd.Series | None = None,
+) -> go.Figure:
+    """Histogram with today's value, median, and IQR overlaid.
+
+    If ``conditional`` (a boolean series aligned with ``series.index``) is
+    provided, an overlay histogram is added for True observations — typically
+    the NBER recession mask, so the user can see the recession-conditional
+    distribution against the full sample.
+    """
+    series = series.dropna()
+    if series.empty:
+        return apply_template(go.Figure(), height=height, show_legend=False)
+
+    color = color or PALETTE["text_muted"]
+    today_color = today_color or PALETTE["accent"]
+    median = float(series.median())
+    q1, q3 = float(series.quantile(0.25)), float(series.quantile(0.75))
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=series.values,
+            nbinsx=bins,
+            marker=dict(color=color, line=dict(width=0)),
+            opacity=0.65,
+            name="All history",
+            hovertemplate="%{x:.2f}<br>n = %{y}<extra></extra>",
+        )
+    )
+    if conditional is not None:
+        cond = conditional.reindex(series.index).fillna(False).astype(bool)
+        if cond.any():
+            fig.add_trace(
+                go.Histogram(
+                    x=series.loc[cond].values,
+                    nbinsx=bins,
+                    marker=dict(color=PALETTE["risk_critical"], line=dict(width=0)),
+                    opacity=0.55,
+                    name="During NBER recessions",
+                    hovertemplate="%{x:.2f}<br>n = %{y}<extra></extra>",
+                )
+            )
+            fig.update_layout(barmode="overlay")
+
+    fig.add_vline(
+        x=median, line=dict(color=PALETTE["text_tiny"], width=1, dash="dot"),
+        annotation_text=f"median {median:+.2f}",
+        annotation_position="top",
+        annotation_font=dict(color=PALETTE["text_tiny"], size=9),
+    )
+    fig.add_vrect(
+        x0=q1, x1=q3, fillcolor=PALETTE["text_tiny"], opacity=0.08, line_width=0,
+        layer="below",
+    )
+    if today_value is not None and np.isfinite(today_value):
+        fig.add_vline(
+            x=today_value, line=dict(color=today_color, width=2),
+            annotation_text=f"today {today_value:+.2f}",
+            annotation_position="top",
+            annotation_font=dict(color=today_color, size=10),
+        )
+
+    if xaxis_title:
+        fig.update_xaxes(title=xaxis_title)
+    fig.update_yaxes(title="observations")
+    return apply_template(fig, height=height)
+
+
+def percentile_rank(series: pd.Series, value: float) -> float:
+    """Empirical percentile of ``value`` within ``series`` (0–100)."""
+    series = series.dropna()
+    if series.empty or not np.isfinite(value):
+        return float("nan")
+    return float((series <= value).mean() * 100.0)
+
+
+def stats_table_html(rows: list[tuple[str, str]]) -> str:
+    """Render a compact label/value table inside a panel."""
+    body = "".join(
+        f'<div class="submodel-row"><span class="name">{escape(label)}</span>'
+        f'<span class="value">{escape(value)}</span></div>'
+        for label, value in rows
+    )
+    return f'<div class="panel"><div class="panel-body">{body}</div></div>'
+
+
 def composite_html(score: int, band: str, *, large: bool = True) -> str:
     color = risk_color(band)
     size = "48px" if large else "32px"

@@ -32,7 +32,7 @@ The dependent variable is the standard 12-month-forward NBER recession indicator
 
 LAME's expanding-window z-scoring requires a minimum of 60 monthly observations. Inverse-volatility weights are computed from the rolling 5-year volatility of each signed z-score; weights are normalised to sum to 1 at every date, with indicators with missing readings dropping out of the basket for that month.
 
-See [`notebooks/methodology.ipynb`](notebooks/methodology.ipynb) for the full walkthrough, including a side-by-side comparison against a naive base-rate baseline.
+A full **Methodology** tab is built into the dashboard itself — it auto-generates the data sources table from the registry and shows the feature set retained by the live fit, so it cannot drift from the code. See also [`notebooks/methodology.ipynb`](notebooks/methodology.ipynb) for a step-by-step walkthrough including a side-by-side comparison against a naive base-rate baseline.
 
 ## Calibration
 

@@ -16,7 +16,7 @@ from src.models.lame import LAME
 from src.models.recession_ensemble import RecessionEnsemble
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
-from src.ui.views import cockpit, curve, recession
+from src.ui.views import cockpit, curve, methodology, recession
 from src.ui.views import lame as lame_view
 
 
@@ -27,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-NAV_OPTIONS = ["Macro Dashboard", "Recession", "Labor", "Yield Curve"]
+NAV_OPTIONS = ["Macro Dashboard", "Recession", "Labor", "Yield Curve", "Methodology"]
 
 inject_theme()
 
@@ -129,7 +129,7 @@ def _nav() -> str:
     selected = option_menu(
         menu_title=None,
         options=NAV_OPTIONS,
-        icons=["grid", "graph-down", "people", "activity"],
+        icons=["grid", "graph-down", "people", "activity", "book"],
         orientation="horizontal",
         default_index=default_index,
         manual_select=manual_select,
@@ -180,6 +180,8 @@ def main() -> None:
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":
         curve.render(models["panel"], models["nber"])
+    elif selected == "Methodology":
+        methodology.render(models["ensemble"])
 
     st.markdown(
         f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'
