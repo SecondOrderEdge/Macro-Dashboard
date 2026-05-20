@@ -1,4 +1,4 @@
-# Macro Dashboard
+# U.S. Macro Dashboard
 
 > A unified view of U.S. recession risk through three independent macro lenses.
 

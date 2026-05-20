@@ -21,7 +21,7 @@ from src.ui.views import lame as lame_view
 
 
 st.set_page_config(
-    page_title="Macro Dashboard",
+    page_title="U.S. Macro Dashboard",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -143,7 +143,7 @@ def _header(models: dict | None) -> None:
         (
             '<div class="dashboard-header">'
             '<div>'
-            '<div class="dashboard-title">Macro Dashboard</div>'
+            '<div class="dashboard-title">U.S. Macro Dashboard</div>'
             f'<div class="dashboard-subtitle">U.S. recession risk · {timestamp}</div>'
             '</div>'
             f'{composite_html}'
