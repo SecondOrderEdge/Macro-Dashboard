@@ -112,6 +112,25 @@ def all_series_ids() -> list[str]:
     return list(SERIES_CONFIG.keys()) + list(TARGET_SERIES.keys())
 
 
+# Plain-English labels for the two engineered features that aren't raw FRED IDs.
+_DERIVED_LABELS = {
+    "SPREAD": "10Y–3M Treasury spread",
+    "UNRATE_CHG3": "Unemployment rate · 3-month change",
+}
+
+
+def feature_label(feat: str) -> str:
+    """Human-readable name for a model feature code (e.g. ``CPILFESL_YOY`` →
+    "Core CPI (YoY)"). Falls back to the raw code for anything unmapped."""
+    if feat in _DERIVED_LABELS:
+        return _DERIVED_LABELS[feat]
+    base = feat[:-4] if feat.endswith("_YOY") else feat
+    info = SERIES_CONFIG.get(base)
+    if info:
+        return f"{info['name']} (YoY)" if feat.endswith("_YOY") else info["name"]
+    return feat
+
+
 # ----------------------------------------------------------------- data access
 
 

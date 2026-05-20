@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-from src.models.recession_probit import THRESHOLD_ELEVATED, THRESHOLD_WARNING
+from src.models.recession_probit import THRESHOLD_ELEVATED, THRESHOLD_WARNING, feature_label
 from src.ui.components import (
     add_recession_shading,
     apply_template,
@@ -247,7 +247,7 @@ def _attribution_block(report: dict) -> str:
         if not items:
             return '<div class="submodel-row"><span class="name">—</span><span class="value">—</span></div>'
         return "".join(
-            f'<div class="submodel-row"><span class="name">{f}</span>'
+            f'<div class="submodel-row"><span class="name">{feature_label(f)}</span>'
             f'<span class="value" style="color:{col};">{v:+.1f} pp</span></div>'
             for f, v in items
         )
@@ -332,7 +332,7 @@ def _render_percentiles(report: dict) -> None:
     )
     feats = list(readings.keys())
     pctiles = [readings[f]["percentile"] for f in feats]
-    labels = [f"{f}  ·  {readings[f]['category']}" for f in feats]
+    labels = [f"{feature_label(f)}  ·  {readings[f]['category']}" for f in feats]
 
     def color(p):
         if p <= 10 or p >= 90:
@@ -393,7 +393,8 @@ def _render_watchlist(report: dict) -> None:
         t50 = f"{s['trigger_50']:.2f}" if s.get("trigger_50") is not None else "—"
         rows_html.append(
             f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
-            f'<td style="padding:6px 8px;">{s["feature"]}<span style="color:#5a6470;"> · {s["category"]}</span></td>'
+            f'<td style="padding:6px 8px;">{feature_label(s["feature"])}'
+            f'<span style="color:#5a6470;font-size:10px;"> · {s["category"]} · {s["feature"]}</span></td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{s["current_value"]:.2f}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{t30}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;color:{PALETTE["accent"]};">{d30}</td>'
@@ -409,7 +410,7 @@ def _render_watchlist(report: dict) -> None:
 
     nearest = ranked[0]
     nearest_txt = (
-        f"<b>{nearest['feature']}</b> is closest to its 30% trigger — "
+        f"<b>{feature_label(nearest['feature'])}</b> is closest to its 30% trigger — "
         f"{abs(nearest['distance_30']):.2f} away from {nearest['trigger_30']:.2f} "
         f"(currently {nearest['current_value']:.2f})."
         if nearest.get("distance_30") is not None

@@ -167,6 +167,15 @@ def test_calibration_stats_shape(synthetic_raw):
     assert not stats["reliability_curve"].empty
 
 
+def test_feature_label_plain_english():
+    assert rp.feature_label("CPILFESL_YOY") == "Core CPI (YoY)"
+    assert rp.feature_label("UMCSENT") == "U. Michigan Consumer Sentiment"
+    assert rp.feature_label("SPREAD") == "10Y–3M Treasury spread"
+    assert rp.feature_label("UNRATE_CHG3") == "Unemployment rate · 3-month change"
+    # Unknown codes fall back to the raw mnemonic.
+    assert rp.feature_label("MADE_UP_CODE") == "MADE_UP_CODE"
+
+
 def test_sign_constraint_helper_rejects_wrong_sign():
     class _Res:
         params = pd.Series({"const": 0.1, "SPREAD": 0.5})  # SPREAD must be negative
