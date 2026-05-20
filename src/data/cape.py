@@ -1,16 +1,26 @@
-"""CAPE ratio (Shiller cyclically-adjusted P/E) from Yale's published dataset.
+"""CAPE ratio (Shiller cyclically-adjusted P/E) from Shiller's published dataset.
 
 CAPE is intentionally NOT an input to the recession ensemble — empirically
 it doesn't help short-horizon recession prediction (it ran hot for most of
-2014-2024 without a recession arriving). It's exposed here as a
-*valuation* context indicator: at extreme readings, the market downside
-conditional on a recession arriving is materially larger than at average
-readings.
+2014-2024 without a recession arriving). It's exposed here as a *valuation*
+context indicator: at extreme readings, the market downside conditional on
+a recession arriving is materially larger than at average readings.
 
-Data is fetched live from Robert Shiller's published spreadsheet at
-econ.yale.edu/~shiller/data/. The fetcher is fault-tolerant: any failure
-returns an empty Series so the dashboard degrades gracefully rather than
-crashing.
+Data path:
+
+1. **Primary**: GitHub-hosted CSV mirror at
+   ``raw.githubusercontent.com/datasets/s-and-p-500/master/data/data.csv``.
+   This is the ``datahub.io/core/s-and-p-500`` repo, which curates Shiller's
+   historical series as a flat CSV. The ``PE10`` column is the CAPE ratio.
+   We use it as the primary source because GitHub Raw is reliable and
+   doesn't require any binary spreadsheet parser.
+
+2. **Fallback**: Robert Shiller's original Excel at Yale. Requires
+   ``openpyxl`` (for .xlsx) or ``xlrd<2.0`` (for .xls); served at
+   ``econ.yale.edu/~shiller/data/`` and at ``shillerdata.com``.
+
+Either source returns the same monthly CAPE series. Any failure returns an
+empty Series so the dashboard degrades gracefully rather than crashing.
 """
 
 from __future__ import annotations
@@ -21,7 +31,18 @@ from typing import Any
 import pandas as pd
 
 
-YALE_URLS = (
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
+_GITHUB_CSV = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500/master/data/data.csv"
+)
+
+_YALE_URLS = (
     "https://shillerdata.com/wp-content/uploads/ie_data.xls",
     "http://www.econ.yale.edu/~shiller/data/ie_data.xls",
     "http://www.econ.yale.edu/~shiller/data/ie_data.xlsx",
@@ -40,19 +61,64 @@ def _cache_data(*args: Any, **kwargs: Any):
         return _passthrough
 
 
-@_cache_data(ttl=604800, show_spinner=False)  # 7 days — CAPE updates monthly
+@_cache_data(ttl=604800, show_spinner=False)  # 7 days
 def fetch_cape_history() -> pd.Series:
-    """Return a monthly-indexed Series of CAPE values, or empty on failure."""
+    """Return a monthly-indexed CAPE Series, or an empty one on total failure.
+
+    Strategy:
+
+    1. Try Shiller's Excel at Yale first (the freshest source, updated
+       monthly by Shiller himself).
+    2. Try the datahub.io GitHub CSV mirror as fallback (long history but
+       updates lag by months or years depending on volunteer maintainers).
+    3. If both work, merge — use the GitHub series as the base and overlay
+       any newer Yale months on top.
+
+    Errors during fetching/parsing are recorded on the returned Series via
+    ``attrs['fetch_log']`` so the UI can surface them.
+    """
+    log: list[str] = []
+    yale_series = _try_fetch_yale(log)
+    github_series = _try_fetch_github(log)
+
+    # Merge: GitHub provides the long base, Yale overlays newer months.
+    if not github_series.empty and not yale_series.empty:
+        merged = github_series.copy()
+        for ts, val in yale_series.items():
+            merged.loc[ts] = val
+        merged = merged.sort_index()
+        merged.attrs["source"] = (
+            f"yale-excel + github (yale latest: {yale_series.index[-1].strftime('%Y-%m')})"
+        )
+        merged.attrs["fetch_log"] = log
+        return merged
+
+    if not yale_series.empty:
+        yale_series.attrs["fetch_log"] = log
+        return yale_series
+
+    if not github_series.empty:
+        github_series.attrs["fetch_log"] = log
+        return github_series
+
+    return _empty(log)
+
+
+def _try_fetch_yale(log: list[str]) -> pd.Series:
     try:
         import requests
     except ImportError:
+        log.append("requests not installed")
         return pd.Series(dtype=float, name="cape")
 
-    for url in YALE_URLS:
+    for url in _YALE_URLS:
         try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-        except Exception:
+            r = requests.get(url, headers=_HEADERS, timeout=30)
+        except Exception as exc:
+            log.append(f"yale {url}: {type(exc).__name__}: {exc}")
+            continue
+        if r.status_code != 200:
+            log.append(f"yale {url}: HTTP {r.status_code}")
             continue
         for engine in ("openpyxl", "xlrd"):
             try:
@@ -62,23 +128,65 @@ def fetch_cape_history() -> pd.Series:
                     skiprows=7,
                     engine=engine,
                 )
-                parsed = _parse_shiller(df)
-                if not parsed.empty:
-                    return parsed
-            except Exception:
+            except Exception as exc:
+                log.append(f"yale {url} via {engine}: {type(exc).__name__}: {exc}")
                 continue
+            s = _parse_shiller_excel(df)
+            if not s.empty:
+                s.attrs["source"] = f"yale-excel ({engine})"
+                return s
+            log.append(f"yale {url} via {engine}: parsed but empty")
     return pd.Series(dtype=float, name="cape")
 
 
-def _parse_shiller(df: pd.DataFrame) -> pd.Series:
-    """Pull the CAPE column out of Shiller's spreadsheet.
+def _try_fetch_github(log: list[str]) -> pd.Series:
+    try:
+        return _fetch_github_csv(log)
+    except Exception as exc:
+        log.append(f"github csv: {type(exc).__name__}: {exc}")
+        return pd.Series(dtype=float, name="cape")
 
-    Yale's first column is a date in float form: ``2024.04`` means April 2024,
-    ``2024.10`` means October 2024 (the digits after the decimal are the
-    month). The CAPE column is usually labelled ``CAPE`` but Shiller has
-    renamed it in some editions to ``Cyclically Adjusted P/E Ratio P/E10``
-    or similar — match by substring.
-    """
+
+def _empty(log: list[str]) -> pd.Series:
+    s = pd.Series(dtype=float, name="cape")
+    s.attrs["fetch_log"] = log
+    return s
+
+
+# ---------------------------------------------------------------- GitHub CSV
+
+
+def _fetch_github_csv(log: list[str]) -> pd.Series:
+    import requests
+
+    r = requests.get(_GITHUB_CSV, headers=_HEADERS, timeout=30)
+    if r.status_code != 200:
+        log.append(f"{_GITHUB_CSV}: HTTP {r.status_code}")
+        return pd.Series(dtype=float, name="cape")
+
+    df = pd.read_csv(io.BytesIO(r.content))
+    if "Date" not in df.columns or "PE10" not in df.columns:
+        log.append(f"github csv: missing columns; got {list(df.columns)[:6]}")
+        return pd.Series(dtype=float, name="cape")
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date", "PE10"])
+    df["PE10"] = pd.to_numeric(df["PE10"], errors="coerce")
+    df = df.dropna(subset=["PE10"])
+    # PE10 == 0 is the missing-data placeholder used for the first 10 years
+    # of the sample (before there's enough history to compute it) and
+    # sometimes for the most-recent months that haven't accumulated yet.
+    df = df[df["PE10"] > 0]
+    s = pd.Series(df["PE10"].astype(float).values, index=df["Date"], name="cape")
+    s = s.sort_index()
+    s.attrs["source"] = "github:datasets/s-and-p-500"
+    return s
+
+
+# ---------------------------------------------------------------- Yale Excel
+
+
+def _parse_shiller_excel(df: pd.DataFrame) -> pd.Series:
     if df.empty:
         return pd.Series(dtype=float, name="cape")
     date_col = df.columns[0]
@@ -95,7 +203,6 @@ def _parse_shiller(df: pd.DataFrame) -> pd.Series:
     df = df.dropna(subset=[date_col, cape_col])
     df["date"] = df[date_col].apply(_yale_date_to_timestamp)
     df = df.dropna(subset=["date"])
-    # CAPE column may contain header text rows; coerce and drop non-numeric.
     df[cape_col] = pd.to_numeric(df[cape_col], errors="coerce")
     df = df.dropna(subset=[cape_col])
     s = pd.Series(df[cape_col].astype(float).values, index=df["date"], name="cape")
@@ -104,11 +211,11 @@ def _parse_shiller(df: pd.DataFrame) -> pd.Series:
 
 def _yale_date_to_timestamp(v) -> pd.Timestamp | None:
     """Yale's date column: float like ``2024.04`` (Apr 2024) or ``2024.1``
-    (Oct 2024 — the digit after the decimal is *positional*, not numeric)."""
+    (Oct 2024 — digits after the decimal are positional, not numeric)."""
     if pd.isna(v):
         return None
     try:
-        s = f"{float(v):.2f}"  # forces two decimal digits
+        s = f"{float(v):.2f}"
     except Exception:
         return None
     if "." not in s:
@@ -116,25 +223,19 @@ def _yale_date_to_timestamp(v) -> pd.Timestamp | None:
     year_str, frac = s.split(".")
     try:
         year = int(year_str)
-        # '04' means April, '10' means October.
         month = int(frac.ljust(2, "0")[:2])
     except Exception:
         return None
-    if month < 1 or month > 12:
-        return None
-    if year < 1871 or year > 2100:
+    if month < 1 or month > 12 or year < 1871 or year > 2100:
         return None
     return pd.Timestamp(year=year, month=month, day=1)
 
 
-def cape_summary(cape: pd.Series, modern_start: str = "1950-01-01") -> dict:
-    """Return current value, percentile rank, median, and recent trend.
+# ---------------------------------------------------------------- summary
 
-    The percentile rank is computed against the *modern* history (default
-    post-1950) because the pre-WWII sample contains structural breaks
-    (gold standard, very different reporting cadence) that make full-history
-    percentiles misleading.
-    """
+
+def cape_summary(cape: pd.Series, modern_start: str = "1950-01-01") -> dict:
+    """Current value, percentile rank, median, recent trend, classic peaks."""
     if cape is None or cape.empty:
         return {}
     cape = cape.dropna().sort_index()
@@ -151,11 +252,14 @@ def cape_summary(cape: pd.Series, modern_start: str = "1950-01-01") -> dict:
     s_to_year_ago = cape.loc[cape.index <= one_yr_ago_idx]
     yr_ago = float(s_to_year_ago.iloc[-1]) if not s_to_year_ago.empty else float("nan")
 
-    # Sample peaks
+    def _peak(start: str, end: str) -> float:
+        window = cape.loc[start:end]
+        return float(window.max()) if not window.empty else float("nan")
+
     peaks = {
-        "1929 peak": float(cape.loc["1929-01-01":"1929-12-31"].max()) if "1929-09-01" in cape.index or any(cape.loc["1929":"1929"].notna()) else float("nan"),
-        "2000 dot-com peak": float(cape.loc["1999-01-01":"2000-12-31"].max()) if not cape.loc["1999-01-01":"2000-12-31"].empty else float("nan"),
-        "2007 peak": float(cape.loc["2007-01-01":"2007-12-31"].max()) if not cape.loc["2007-01-01":"2007-12-31"].empty else float("nan"),
+        "1929 peak": _peak("1929-01-01", "1929-12-31"),
+        "2000 dot-com peak": _peak("1999-01-01", "2000-12-31"),
+        "2007 peak": _peak("2007-01-01", "2007-12-31"),
     }
 
     return {
@@ -166,6 +270,7 @@ def cape_summary(cape: pd.Series, modern_start: str = "1950-01-01") -> dict:
         "one_year_ago": yr_ago,
         "modern_start": pd.Timestamp(modern_start),
         "peaks": peaks,
+        "source": cape.attrs.get("source", "unknown"),
     }
 
 

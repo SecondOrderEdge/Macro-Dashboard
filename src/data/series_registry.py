@@ -12,7 +12,12 @@ import pandas as pd
 
 
 SERIES_REGISTRY: dict[str, dict] = {
-    # Yield curve
+    # Yield curve — money-market / front-end
+    "sofr": {"fred_id": "SOFR", "freq": "D", "transform": "level"},
+    "effr": {"fred_id": "DFF",  "freq": "D", "transform": "level"},
+    "iorb": {"fred_id": "IORB", "freq": "D", "transform": "level"},
+
+    # Yield curve — Treasury constant-maturity
     "t10y3m": {"fred_id": "T10Y3M", "freq": "D", "transform": "level"},
     "t10y2y": {"fred_id": "T10Y2Y", "freq": "D", "transform": "level"},
     "dgs1mo": {"fred_id": "DGS1MO", "freq": "D", "transform": "level"},

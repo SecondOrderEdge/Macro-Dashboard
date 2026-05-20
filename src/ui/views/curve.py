@@ -82,6 +82,7 @@ def render(panel: pd.DataFrame, nber: pd.Series) -> None:
     )
 
     if selected == "Term Structure":
+        _render_funding_panel(panel)
         _render_term_structure(yc)
     elif selected == "By Maturity":
         _render_by_maturity(panel, nber)
@@ -134,6 +135,154 @@ def _render_spread_cards(spreads: pd.DataFrame, stats: dict) -> None:
 
 
 # ---------------------------------------------------------------- term structure
+
+
+def _render_funding_panel(panel: pd.DataFrame) -> None:
+    """Front-end money-market rates: SOFR, Fed Funds Effective, 1M T-Bill.
+
+    These three rates ought to move in tandem. Sustained spreads between
+    them flag specific kinds of stress: SOFR rising materially above Fed
+    Funds Effective indicates repo-market strain (the September 2019
+    episode is the textbook case); a wide T-Bill discount to SOFR/EFFR
+    points to flight-to-quality demand for short Treasuries.
+    """
+    if not any(col in panel.columns for col in ("SOFR", "DFF", "DGS1MO")):
+        return
+
+    sofr  = panel.get("SOFR",   pd.Series(dtype=float)).dropna()
+    effr  = panel.get("DFF",    pd.Series(dtype=float)).dropna()
+    iorb  = panel.get("IORB",   pd.Series(dtype=float)).dropna()
+    tbill = panel.get("DGS1MO", pd.Series(dtype=float)).dropna()
+
+    st.markdown(
+        '<div class="label-small">Front-end funding · overnight market rates</div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(3)
+
+    def _card(col, label, series, source, color=PALETTE["accent"]):
+        if series.empty:
+            with col:
+                st.markdown(metric_card(label, "—", "%"), unsafe_allow_html=True)
+            return
+        latest = float(series.iloc[-1])
+        m_ago = _asof(series, series.index[-1] - pd.DateOffset(months=1))
+        delta = (latest - m_ago) if np.isfinite(m_ago) else float("nan")
+        delta_str = f"{delta:+.2f}pp 1m" if np.isfinite(delta) else ""
+        spark = sparkline_svg(series.tail(252).values, color=color)
+        subline = f"{source} · {series.index[-1].strftime('%Y-%m-%d')} · {delta_str}"
+        with col:
+            st.markdown(
+                metric_card(
+                    label=label,
+                    value=f"{latest:.2f}",
+                    unit="%",
+                    risk_color_hex=color,
+                    sparkline_html=spark,
+                    subline=subline,
+                ),
+                unsafe_allow_html=True,
+            )
+
+    _card(cols[0], "SOFR",              sofr,  "NY Fed · overnight repo (since 2018)", PALETTE["accent"])
+    _card(cols[1], "Fed Funds (EFFR)",  effr,  "NY Fed · interbank effective",         PALETTE["submodel"]["labor"])
+    _card(cols[2], "1M T-Bill (DGS1MO)", tbill, "Treasury · constant maturity",        PALETTE["submodel"]["yield_curve"])
+
+    # --- Combined recent-history chart ---------------------------------
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=5)
+    fig = go.Figure()
+    for s, name, color in [
+        (sofr,  "SOFR",             PALETTE["accent"]),
+        (effr,  "Fed Funds (EFFR)", PALETTE["submodel"]["labor"]),
+        (tbill, "1M T-Bill",        PALETTE["submodel"]["yield_curve"]),
+    ]:
+        if s.empty:
+            continue
+        s_win = s.loc[s.index >= cutoff]
+        fig.add_trace(
+            go.Scatter(
+                x=s_win.index, y=s_win.values, mode="lines",
+                line=dict(color=color, width=1.2),
+                name=name,
+                hovertemplate=f"%{{x|%b %Y}}<br>%{{y:.2f}}%<extra>{name}</extra>",
+            )
+        )
+    # Mark IORB (the policy floor) if available
+    if not iorb.empty:
+        iorb_win = iorb.loc[iorb.index >= cutoff]
+        if not iorb_win.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=iorb_win.index, y=iorb_win.values, mode="lines",
+                    line=dict(color=PALETTE["text_muted"], width=0.9, dash="dot"),
+                    name="IORB (policy floor)",
+                    hovertemplate="%{x|%b %Y}<br>%{y:.2f}%<extra>IORB</extra>",
+                )
+            )
+
+    fig.update_yaxes(title="Rate (%)")
+    apply_template(fig, height=320)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- SOFR vs EFFR spread (with stress threshold) -------------------
+    if not sofr.empty and not effr.empty:
+        common = sofr.index.intersection(effr.index)
+        if len(common) > 0:
+            spread = (sofr.reindex(common) - effr.reindex(common)).dropna()
+            spread_recent = spread.loc[spread.index >= cutoff]
+            current = float(spread.iloc[-1]) if not spread.empty else float("nan")
+            p95 = float(spread.abs().quantile(0.95)) if not spread.empty else float("nan")
+            stress = abs(current) > p95 if np.isfinite(current) and np.isfinite(p95) else False
+
+            cols_b = st.columns([2, 1])
+            with cols_b[0]:
+                st.markdown(
+                    '<div class="label-small" style="margin-top:8px;">SOFR minus Fed Funds spread · stress monitor</div>',
+                    unsafe_allow_html=True,
+                )
+                fig2 = go.Figure()
+                fig2.add_trace(
+                    go.Scatter(
+                        x=spread_recent.index, y=spread_recent.values * 100, mode="lines",
+                        line=dict(color=PALETTE["accent"], width=1.2),
+                        name="SOFR − EFFR (bp)",
+                        fill="tozeroy",
+                        fillcolor="rgba(212,165,116,0.10)",
+                        hovertemplate="%{x|%b %Y}<br>%{y:+.0f}bp<extra></extra>",
+                    )
+                )
+                fig2.add_hline(y=0, line=dict(color="#3d4754", width=1, dash="dot"))
+                fig2.add_hline(
+                    y=p95 * 100, line=dict(color=PALETTE["risk_high"], width=1, dash="dash"),
+                    annotation_text="95th pct |spread|", annotation_position="top right",
+                    annotation_font=dict(color=PALETTE["risk_high"], size=9),
+                )
+                fig2.add_hline(y=-p95 * 100, line=dict(color=PALETTE["risk_high"], width=1, dash="dash"))
+                fig2.update_yaxes(title="bp")
+                apply_template(fig2, height=240, show_legend=False)
+                st.plotly_chart(fig2, use_container_width=True)
+
+            with cols_b[1]:
+                color = PALETTE["risk_critical"] if stress else PALETTE["risk_low"]
+                badge = "STRESSED" if stress else "NORMAL"
+                msg = (
+                    "SOFR is materially diverging from Fed Funds — historically associated "
+                    "with repo-market strain (e.g. Sep 2019 spike, March 2020)."
+                    if stress else
+                    "SOFR is tracking Fed Funds within its normal range — no repo-market stress signal."
+                )
+                st.markdown(
+                    f'<div class="panel"><div class="panel-header">'
+                    f'<span>SOFR − EFFR</span>'
+                    f'<span class="risk-badge" style="color:{color};">{badge}</span>'
+                    f'</div><div class="panel-body" style="font-size:13px;line-height:1.6;color:{PALETTE["text_primary"]};">'
+                    f'Current: <b style="color:{color};">{current * 100:+.1f}bp</b><br>'
+                    f'95th pct |spread|: {p95 * 100:.1f}bp<br><br>'
+                    f'<span style="font-size:12px;color:{PALETTE["text_muted"]};">{msg}</span>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
 
 
 def _render_term_structure(yc: YieldCurve) -> None:
