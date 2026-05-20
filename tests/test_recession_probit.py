@@ -144,6 +144,29 @@ def test_report_trend_attribution(report):
     assert "prob_change_pp" in ta
 
 
+def test_target_series_is_binary(synthetic_raw):
+    t = rp.target_series(synthetic_raw)
+    assert not t.empty
+    assert set(np.unique(t.values)).issubset({0.0, 1.0})
+
+
+def test_walk_forward_is_out_of_sample_and_bounded(synthetic_raw):
+    oos = rp.walk_forward(synthetic_raw, oos_start="1990-01-01", refit_every_months=24)
+    assert not oos.empty
+    assert (oos >= 0).all() and (oos <= 100).all()
+    # OOS predictions must start at/after the requested start.
+    assert oos.index.min() >= pd.Timestamp("1990-01-01")
+
+
+def test_calibration_stats_shape(synthetic_raw):
+    oos = rp.walk_forward(synthetic_raw, oos_start="1990-01-01", refit_every_months=24)
+    target = rp.target_series(synthetic_raw)
+    stats = rp.calibration_stats(oos, target)
+    assert 0 <= stats["brier"] <= 1
+    assert stats["n_obs"] > 0
+    assert not stats["reliability_curve"].empty
+
+
 def test_sign_constraint_helper_rejects_wrong_sign():
     class _Res:
         params = pd.Series({"const": 0.1, "SPREAD": 0.5})  # SPREAD must be negative

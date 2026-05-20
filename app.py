@@ -9,11 +9,10 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 
 from src.data.fred_client import fetch_panel
-from src.data.nber import load_nber_recessions, recession_in_next_12m
+from src.data.nber import load_recession_flags
 from src.data.series_registry import fred_ids
 from src.models.composite import composite_risk
 from src.models.lame import LAME
-from src.models.recession_ensemble import RecessionEnsemble
 from src.models.recession_probit import compute_probit_report
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
@@ -43,12 +42,13 @@ def _load_panel() -> pd.DataFrame:
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def _load_nber() -> pd.Series:
-    return load_nber_recessions()
+    # Prefer FRED USREC (live, auto-updating); falls back to the bundled CSV.
+    return load_recession_flags()
 
 
 @st.cache_resource(show_spinner=False)
-def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
-    """Build (fit) the three models + walk-forward backtest.
+def _build_models(cache_version: str) -> dict:
+    """Build the LAME, yield-curve, and five-model probit recession engines.
 
     ``cache_version`` participates in Streamlit's resource cache key — bump
     it whenever model or class code changes, otherwise the *old* instance
@@ -56,48 +56,28 @@ def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
     imported dependencies). The argument deliberately has no underscore
     prefix: Streamlit skips underscore-prefixed args when computing the
     cache key, which silently neutralises any value you pass.
-
-    ``exclude_pandemic`` drops 2020-02 through 2021-06 from training. The
-    pandemic recession was caused by an exogenous shock and pulls some
-    coefficients in directions that don't reflect typical business-cycle
-    dynamics; excluding it gives a model that's more representative of
-    pre-2020 cyclical behaviour.
     """
     panel = _load_panel()
     nber = _load_nber()
-    fwd = recession_in_next_12m(nber)
-
-    exclude = [("2020-02", "2021-06")] if exclude_pandemic else None
-    ensemble = RecessionEnsemble(exclude_periods=exclude)
-    ensemble.fit(panel, fwd)
 
     lame = LAME()
     lame.compute(panel)
 
     yc = YieldCurve(panel)
 
-    # Walk-forward backtest — annual refits from 1985. Cached with the rest.
-    oos_history = ensemble.walk_forward_predict(
-        panel, fwd, oos_start="1985-01-01", refit_every_months=12,
-    )
-    oos_stats = ensemble.oos_calibration_stats(oos_history, fwd)
-
-    # Five-model academic probit ensemble (powers the Recession page). Isolated
-    # in a try/except so a probit-side failure can't take down the whole app.
+    # Five-model academic probit ensemble — the app-wide recession engine. It
+    # carries its own in-sample + walk-forward calibration. Isolated in a
+    # try/except so a probit-side failure can't take down the whole app.
     try:
         probit = compute_probit_report()
     except Exception as exc:  # noqa: BLE001
         probit = {"error": str(exc)}
 
     return {
-        "ensemble": ensemble,
         "lame": lame,
         "yield_curve": yc,
         "panel": panel,
         "nber": nber,
-        "oos_history": oos_history,
-        "oos_stats": oos_stats,
-        "exclude_pandemic": exclude_pandemic,
         "probit": probit,
     }
 
@@ -105,9 +85,32 @@ def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
 # ------------------------------------------------------------------------- run
 
 
+def _probit_ensemble_now(models: dict) -> float:
+    """Headline 12-month recession probability from the five-model probit ensemble."""
+    probit = models.get("probit") or {}
+    if not probit or "error" in probit:
+        return float("nan")
+    return float(probit.get("ensemble_probability", float("nan")))
+
+
+def _recession_view(models: dict) -> tuple[dict, pd.DataFrame]:
+    """Adapt the probit report into the ``current`` / ``history`` shape the
+    dashboard cards expect (ensemble + per-model 'submodels' + history)."""
+    probit = models.get("probit") or {}
+    if not probit or "error" in probit:
+        return {"ensemble": float("nan"), "submodels": {}, "drivers": {}}, pd.DataFrame()
+    current = {
+        "ensemble": probit["ensemble_probability"],
+        "submodels": probit.get("model_probabilities", {}),
+        "drivers": {},
+    }
+    history = pd.DataFrame({"ensemble": probit["ensemble_history"]})
+    return current, history
+
+
 def _composite_now(models: dict) -> dict:
     panel = models["panel"]
-    ensemble_now = float(models["ensemble"].predict_current()["ensemble"])
+    ensemble_now = _probit_ensemble_now(models)
     lame_hist = models["lame"].history()
     lame_now = float(lame_hist.iloc[-1]) if not lame_hist.empty else float("nan")
     spreads = models["yield_curve"].spreads_history()
@@ -202,10 +205,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models(
-                "v9-probit-ensemble",
-                exclude_pandemic=st.session_state.get("exclude_pandemic", True),
-            )
+            models = _build_models("v10-probit-appwide")
     except Exception as exc:
         _header(None)
         _nav()
@@ -219,7 +219,8 @@ def main() -> None:
     selected = _nav()
 
     if selected == "Macro Dashboard":
-        dashboard.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
+        rec_current, rec_history = _recession_view(models)
+        dashboard.render(rec_current, rec_history, models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
         recession.render(models.get("probit"), models["nber"])
     elif selected == "Labor":
@@ -227,12 +228,7 @@ def main() -> None:
     elif selected == "Yield Curve":
         curve.render(models["panel"], models["nber"])
     elif selected == "Methodology":
-        methodology.render(
-            models["ensemble"],
-            oos_history=models.get("oos_history"),
-            oos_stats=models.get("oos_stats"),
-            exclude_pandemic=models.get("exclude_pandemic", True),
-        )
+        methodology.render(models.get("probit"))
 
     st.markdown(
         f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'

@@ -1,10 +1,9 @@
 """Five-model probit recession ensemble (12-month-ahead).
 
 Ported from the standalone Recession_Probability_Model repo that drives the
-weekly investment-committee email. Unlike :mod:`src.models.recession_ensemble`
-(five *thematic* submodels averaged into a composite), this engine runs five
-*methodologically distinct* academic specifications over a shared 37-series
-FRED universe and averages them:
+weekly investment-committee email. This engine runs five *methodologically
+distinct* academic specifications over a shared 37-series FRED universe and
+averages them:
 
 1. **NY Fed**         — probit on the 10y-3m term spread alone (Estrella-Mishkin 1998).
 2. **Wright**         — probit on spread + fed funds rate (Wright 2006).
@@ -292,16 +291,12 @@ def _prob(params: np.ndarray, x: np.ndarray) -> float:
 # ------------------------------------------------------------------- main report
 
 
-def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_seed: int = 42) -> dict:
-    """Fit all five models and assemble the full analytics report.
+def _prepare(raw: pd.DataFrame) -> dict:
+    """Engineer features, filter coverage, and run full-sample BIC selection.
 
-    ``raw`` is a month-start indexed DataFrame of raw FRED levels (see
-    :func:`fetch_probit_panel`). Returns a dict mirroring the email's
-    ``daily_summary.json`` plus the time series the dashboard charts need.
+    Shared by :func:`build_report` (point-in-time) and :func:`walk_forward`
+    (out-of-sample) so both see an identical feature universe and selection.
     """
-    if sm is None or _stats is None:
-        raise RuntimeError("statsmodels and scipy are required for the probit ensemble.")
-
     data, feature_cols, feat_to_cat = engineer_features(raw)
     if "TARGET" not in data.columns:
         raise RuntimeError("USREC target unavailable — cannot fit the probit ensemble.")
@@ -323,6 +318,34 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     if len(bic_selected) <= len(seed):
         # No valid multivariate combination — fall back to the Wright pair.
         bic_selected = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
+
+    return {
+        "data": data,
+        "feat_to_cat": feat_to_cat,
+        "available": available,
+        "model_df": model_df,
+        "predict_df": predict_df,
+        "y": y,
+        "spread_feat": spread_feat,
+        "bic_selected": bic_selected,
+    }
+
+
+def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_seed: int = 42) -> dict:
+    """Fit all five models and assemble the full analytics report.
+
+    ``raw`` is a month-start indexed DataFrame of raw FRED levels (see
+    :func:`fetch_probit_panel`). Returns a dict mirroring the email's
+    ``daily_summary.json`` plus the time series the dashboard charts need.
+    """
+    if sm is None or _stats is None:
+        raise RuntimeError("statsmodels and scipy are required for the probit ensemble.")
+
+    prep = _prepare(raw)
+    data, feat_to_cat = prep["data"], prep["feat_to_cat"]
+    available, bic_selected = prep["available"], prep["bic_selected"]
+    model_df, predict_df = prep["model_df"], prep["predict_df"]
+    y, spread_feat = prep["y"], prep["spread_feat"]
 
     # --- fit the re-estimated probit models -----------------------------------
     models: dict[str, dict] = {}
@@ -568,9 +591,144 @@ def _trend_attribution(predict_df, res_bic, bic_selected, latest_vals, bic_prob)
         return {"error": str(exc)}
 
 
+# ----------------------------------------------------------- walk-forward / calibration
+
+
+def target_series(raw: pd.DataFrame) -> pd.Series:
+    """The point-in-time training target (recession at t+12), as a 0/1 series."""
+    data, _, _ = engineer_features(raw)
+    return data["TARGET"].dropna().astype(float)
+
+
+def walk_forward(
+    raw: pd.DataFrame, *, oos_start: str = "1985-01-01", refit_every_months: int = 12,
+) -> pd.Series:
+    """True out-of-sample ensemble probability (%), refit on expanding windows.
+
+    At each refit date the re-estimated models (NY Fed, Wright, BIC) are fit
+    using only data strictly before that date and used to predict every month
+    until the next refit. Estrella-Mishkin (closed form) and Chauvet-Piger
+    (a published series) are inherently out-of-sample. No future data enters
+    any prediction.
+
+    The BIC *feature set* is selected once on the full sample (parameters are
+    re-estimated out-of-sample, selection is not) — the same in-sample-selection
+    caveat the methodology page documents; reselecting features at every refit
+    would multiply runtime without changing the headline conclusion.
+    """
+    if sm is None or _stats is None:
+        raise RuntimeError("statsmodels and scipy are required for walk-forward.")
+
+    prep = _prepare(raw)
+    data, available, bic_selected = prep["data"], prep["available"], prep["bic_selected"]
+    spread_feat = prep["spread_feat"]
+    model_df = prep["model_df"]
+
+    wright_feats = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
+    specs = {"NY Fed": [spread_feat], "Wright": wright_feats, "BIC-selected": bic_selected}
+
+    em = (
+        pd.Series(_stats.norm.cdf(_EM_CONST + _EM_SPREAD * data["SPREAD"].values) * 100, index=data.index)
+        if "SPREAD" in data.columns else None
+    )
+    cp = data["RECPROUSM156N"] if "RECPROUSM156N" in data.columns else None
+
+    start_ts = pd.Timestamp(oos_start)
+    end_ts = model_df.index.max()
+    refit_dates = pd.date_range(start=start_ts, end=end_ts, freq=f"{refit_every_months}MS")
+    if len(refit_dates) == 0:
+        return pd.Series(dtype=float, name="ensemble_oos")
+
+    monthly: dict[pd.Timestamp, float] = {}
+    for i, refit_ts in enumerate(refit_dates):
+        next_ts = refit_dates[i + 1] if i + 1 < len(refit_dates) else end_ts + pd.DateOffset(months=1)
+        train = model_df.loc[model_df.index < refit_ts]
+        if len(train) < MIN_WINDOW:
+            continue
+        y_train = train["TARGET"].astype(float)
+
+        fitted: dict[str, np.ndarray] = {}
+        for name, feats in specs.items():
+            if not feats:
+                continue
+            try:
+                fitted[name] = _fit_probit(y_train, train[feats], maxiter=300).params.values
+            except Exception:  # noqa: BLE001
+                pass
+
+        window = data.loc[(data.index >= refit_ts) & (data.index < next_ts)]
+        for ts in window.index:
+            vals = []
+            for name, feats in specs.items():
+                if name not in fitted:
+                    continue
+                row = data.loc[ts, feats]
+                if row.isna().any():
+                    continue
+                vals.append(_prob(fitted[name], row.astype(float).values))
+            if em is not None and ts in em.index and np.isfinite(em.loc[ts]):
+                vals.append(float(em.loc[ts]))
+            if cp is not None and ts in cp.index and np.isfinite(cp.loc[ts]):
+                vals.append(float(cp.loc[ts]))
+            if vals:
+                monthly[ts] = float(np.mean(vals))
+
+    return pd.Series(monthly, name="ensemble_oos").sort_index()
+
+
+def calibration_stats(pred_pct: pd.Series, target: pd.Series) -> dict:
+    """Brier / AUC / reliability + base-rate skill for a probability series."""
+    pred = (pred_pct / 100.0).rename("p")
+    y = target.astype(float).rename("y")
+    df = pd.concat([pred, y], axis=1, sort=True).dropna()
+    if df.empty:
+        return {"brier": float("nan"), "auc": float("nan"), "reliability_curve": pd.DataFrame(),
+                "baseline_brier": float("nan"), "skill_score": float("nan"), "n_obs": 0}
+
+    brier = float(((df["p"] - df["y"]) ** 2).mean())
+    base_rate = float(df["y"].mean())
+    baseline = float(((base_rate - df["y"]) ** 2).mean())
+    skill = (1 - brier / baseline) * 100 if baseline > 0 else float("nan")
+
+    try:
+        from sklearn.metrics import roc_auc_score
+        auc = float(roc_auc_score(df["y"].values, df["p"].values)) if df["y"].nunique() > 1 else float("nan")
+    except Exception:  # noqa: BLE001
+        auc = float("nan")
+
+    bins = np.linspace(0, 1, 11)
+    df["bin"] = pd.cut(df["p"], bins=bins, include_lowest=True)
+    rel = (
+        df.groupby("bin", observed=True)
+        .agg(predicted=("p", "mean"), actual=("y", "mean"), n=("y", "size"))
+        .reset_index(drop=True)
+        .dropna()
+    )
+    return {
+        "brier": brier, "auc": auc, "reliability_curve": rel,
+        "baseline_brier": baseline, "skill_score": skill, "n_obs": int(len(df)),
+    }
+
+
 def compute_probit_report(*, bootstrap: int = BOOTSTRAP_ITERS) -> dict:
-    """Fetch the FRED universe and build the full report (dashboard entry point)."""
+    """Fetch the FRED universe and build the full report + calibration backtest.
+
+    Adds in-sample and walk-forward calibration to the base report so the
+    methodology page can show the same diagnostics the thematic ensemble had.
+    """
     raw = fetch_probit_panel()
     if raw.empty or "USREC" not in raw.columns:
         raise RuntimeError("FRED returned no usable data for the probit ensemble.")
-    return build_report(raw, bootstrap=bootstrap)
+
+    report = build_report(raw, bootstrap=bootstrap)
+    target = target_series(raw)
+
+    report["in_sample_calibration"] = calibration_stats(report["ensemble_history"], target)
+    try:
+        oos = walk_forward(raw)
+        report["oos_history"] = oos
+        report["oos_calibration"] = calibration_stats(oos, target)
+    except Exception as exc:  # noqa: BLE001
+        report["oos_history"] = pd.Series(dtype=float, name="ensemble_oos")
+        report["oos_calibration"] = {"error": str(exc)}
+    return report

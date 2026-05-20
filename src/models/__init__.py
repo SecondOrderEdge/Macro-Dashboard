@@ -2,13 +2,14 @@
 
 from .composite import composite_risk, curve_to_risk, lame_to_risk
 from .lame import LAME
-from .recession_ensemble import RecessionEnsemble
+from .recession_probit import build_report, compute_probit_report
 from .yield_curve import YieldCurve
 
 __all__ = [
     "LAME",
-    "RecessionEnsemble",
     "YieldCurve",
+    "build_report",
+    "compute_probit_report",
     "composite_risk",
     "curve_to_risk",
     "lame_to_risk",
