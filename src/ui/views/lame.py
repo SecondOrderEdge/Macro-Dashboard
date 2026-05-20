@@ -419,12 +419,10 @@ def _recession_min(diffusion: pd.Series, nber: pd.Series) -> float:
 
 
 def _render_beveridge(panel: pd.DataFrame, nber: pd.Series) -> None:
+    """The Beveridge curve: openings vs. unemployment, with era coloring and
+    an explainer panel so the chart actually teaches something."""
     if "UNRATE" not in panel.columns or "JTSJOL" not in panel.columns:
         return
-    if "CLF16OV" in panel.columns:
-        pass  # not used; openings rate computed from JTSJOL if available
-    # JTSJOL is openings (level). For a proper Beveridge we want the rate; we
-    # approximate by normalizing openings against its own history.
     unrate = panel["UNRATE"].dropna().resample("ME").last()
     jol = panel["JTSJOL"].dropna().resample("ME").last()
     df = pd.concat([unrate.rename("unrate"), jol.rename("openings")], axis=1).dropna()
@@ -435,48 +433,180 @@ def _render_beveridge(panel: pd.DataFrame, nber: pd.Series) -> None:
     nber_monthly.index = pd.DatetimeIndex(nber_monthly.index).to_period("M").to_timestamp()
     df.index = pd.DatetimeIndex(df.index).to_period("M").to_timestamp()
     df["recession"] = nber_monthly.reindex(df.index).fillna(False).astype(bool)
+    df = df.sort_index()
 
-    recent_cutoff = df.index.max() - pd.DateOffset(months=24)
-    recent = df.loc[df.index >= recent_cutoff]
-    older = df.loc[df.index < recent_cutoff]
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=older["unrate"], y=older["openings"], mode="markers",
-            marker=dict(size=4, color=PALETTE["text_tiny"], opacity=0.5),
-            name="History",
-            hovertemplate="UR %{x:.1f}%<br>Openings %{y:,.0f}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=recent["unrate"], y=recent["openings"], mode="lines+markers",
-            marker=dict(size=6, color=PALETTE["accent"]),
-            line=dict(color=PALETTE["accent"], width=1.4),
-            name="Last 24 months",
-            hovertemplate="%{customdata|%b %Y}<br>UR %{x:.1f}%<br>Openings %{y:,.0f}<extra></extra>",
-            customdata=recent.index,
-        )
-    )
-    if not recent.empty:
-        last = recent.iloc[-1]
-        fig.add_trace(
-            go.Scatter(
-                x=[last["unrate"]], y=[last["openings"]], mode="markers",
-                marker=dict(size=12, color=PALETTE["accent"], line=dict(color="#0a0d12", width=2)),
-                name="Latest", showlegend=False,
-                hovertemplate="Latest<br>UR %{x:.1f}%<br>Openings %{y:,.0f}<extra></extra>",
-            )
-        )
-    fig.update_xaxes(title="Unemployment rate (%)")
-    fig.update_yaxes(title="Job openings (thousands)")
-    apply_template(fig, height=380)
+    # --- Header / explainer ------------------------------------------------
     st.markdown(
-        '<div class="label-small" style="margin-top:8px;">Beveridge curve · openings vs. unemployment</div>',
+        '<div class="label-small" style="margin-top:16px;">Beveridge curve · openings vs. unemployment</div>',
         unsafe_allow_html=True,
     )
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        "<p><b>What it is.</b> A scatter of job openings (vertical) against the "
+        "unemployment rate (horizontal). Each dot is one month since JOLTS began in "
+        "December 2000. The relationship is mechanically negative — high unemployment "
+        "tends to coincide with few openings, and vice versa.</p>"
+        "<p><b>How to read movements.</b> Moves <i>along</i> the curve are normal "
+        "cyclical behaviour: recessions push you down and to the right (fewer openings, "
+        "higher unemployment), recoveries pull you up and to the left. Moves "
+        "<i>perpendicular</i> to the curve — outward or inward shifts — reveal something "
+        "structural about labor-market matching efficiency.</p>"
+        "<p><b>Why analysts care.</b> An outward shift means there are <i>more</i> "
+        "openings at the same unemployment rate than history would predict. That's "
+        "consistent with workers and jobs being harder to match (skills mismatch, "
+        "geographic frictions, reservation-wage shifts). The 2021–22 post-COVID "
+        "regime sat far to the upper-right of the pre-COVID curve and is the most "
+        "dramatic outward shift in the JOLTS sample.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # --- Era buckets so the post-COVID shift pops -------------------------
+    df["era"] = df.index.map(_era_label)
+    era_colors = {
+        "2000–2007 · expansion": "#5a6470",
+        "2007–2009 · GFC recession": PALETTE["risk_critical"],
+        "2009–2019 · recovery": PALETTE["text_muted"],
+        "2020 · COVID shock": "#9d7aa8",
+        "2021–2022 · post-COVID tightness": "#c97c5d",
+        "2023–today": PALETTE["accent"],
+    }
+
+    fig = go.Figure()
+    for era, color in era_colors.items():
+        sub = df[df["era"] == era]
+        if sub.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=sub["unrate"], y=sub["openings"], mode="markers",
+                marker=dict(size=5 if "today" not in era and "COVID shock" not in era else 7,
+                            color=color, opacity=0.7 if "expansion" in era or "recovery" in era else 0.9),
+                name=era,
+                hovertemplate="%{customdata|%b %Y}<br>UR %{x:.1f}%<br>Openings %{y:,.0f}<extra></extra>",
+                customdata=sub.index,
+            )
+        )
+
+    # --- Latest point with date label -------------------------------------
+    last = df.iloc[-1]
+    fig.add_trace(
+        go.Scatter(
+            x=[last["unrate"]], y=[last["openings"]], mode="markers",
+            marker=dict(size=14, color=PALETTE["accent"], line=dict(color="#0a0d12", width=2)),
+            name=f"Today · {df.index[-1].strftime('%b %Y')}",
+            hovertemplate=f"Today · {df.index[-1].strftime('%b %Y')}<br>UR %{{x:.1f}}%<br>Openings %{{y:,.0f}}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    fig.add_annotation(
+        x=last["unrate"], y=last["openings"],
+        text=f"<b>today</b><br>{df.index[-1].strftime('%b %Y')}",
+        showarrow=True, arrowhead=2, ax=40, ay=-30,
+        arrowcolor=PALETTE["accent"], arrowwidth=1,
+        font=dict(color=PALETTE["accent"], size=11, family="JetBrains Mono"),
+        bgcolor="rgba(10,13,18,0.85)", borderpad=4,
+    )
+
+    # --- Key inflection points --------------------------------------------
+    _annotate_extremum(fig, df, "COVID shock peak", lookup=("2020-04-01", "2020-06-01"))
+    _annotate_extremum(fig, df, "post-COVID tightness", lookup=("2022-03-01", "2022-06-01"))
+    _annotate_extremum(fig, df, "pre-COVID baseline", lookup=("2019-01-01", "2019-12-01"))
+
+    fig.update_xaxes(title="Unemployment rate (%)")
+    fig.update_yaxes(title="Job openings (thousands)")
+    apply_template(fig, height=460)
     st.plotly_chart(fig, use_container_width=True)
+
+    # --- Interpretation panel: where we are vs the pre-COVID baseline -----
+    _render_beveridge_read(df)
+
+
+def _era_label(ts: pd.Timestamp) -> str:
+    yr = ts.year
+    if yr <= 2007:
+        return "2000–2007 · expansion"
+    if yr <= 2009 and ts >= pd.Timestamp("2007-12-01"):
+        return "2007–2009 · GFC recession"
+    if yr <= 2019:
+        return "2009–2019 · recovery"
+    if yr == 2020 or (yr == 2021 and ts < pd.Timestamp("2021-04-01")):
+        return "2020 · COVID shock"
+    if yr <= 2022:
+        return "2021–2022 · post-COVID tightness"
+    return "2023–today"
+
+
+def _annotate_extremum(fig: go.Figure, df: pd.DataFrame, label: str, lookup: tuple[str, str]) -> None:
+    """Annotate the average position of df rows in [lookup[0], lookup[1]]."""
+    start, end = pd.Timestamp(lookup[0]), pd.Timestamp(lookup[1])
+    sub = df.loc[(df.index >= start) & (df.index <= end)]
+    if sub.empty:
+        return
+    x = float(sub["unrate"].mean())
+    y = float(sub["openings"].mean())
+    fig.add_annotation(
+        x=x, y=y,
+        text=label,
+        showarrow=True, arrowhead=2, ax=30, ay=-25,
+        arrowcolor=PALETTE["text_muted"], arrowwidth=1,
+        font=dict(color=PALETTE["text_muted"], size=10),
+        bgcolor="rgba(10,13,18,0.7)", borderpad=3,
+    )
+
+
+def _render_beveridge_read(df: pd.DataFrame) -> None:
+    """Plain-English read of where we are vs the pre-COVID baseline."""
+    last = df.iloc[-1]
+    today_unrate = float(last["unrate"])
+    today_openings = float(last["openings"])
+
+    # Pre-COVID baseline: nearest-neighbour openings level for the same unrate, 2010–2019.
+    pre_covid = df.loc[(df.index >= "2010-01-01") & (df.index <= "2019-12-31")]
+    if pre_covid.empty:
+        return
+
+    # Find the pre-COVID month with the unemployment rate closest to today's.
+    nearest_idx = (pre_covid["unrate"] - today_unrate).abs().idxmin()
+    baseline_unrate = float(pre_covid.loc[nearest_idx, "unrate"])
+    baseline_openings = float(pre_covid.loc[nearest_idx, "openings"])
+    delta = today_openings - baseline_openings
+    pct = (delta / baseline_openings) * 100 if baseline_openings else float("nan")
+
+    if abs(pct) < 5:
+        verdict = (
+            "The curve is back on the pre-COVID Beveridge relationship. The labor "
+            "market has finished normalising — openings at this unemployment rate "
+            "are roughly where the 2010s sample would predict."
+        )
+        verdict_color = PALETTE["risk_low"]
+    elif pct >= 5:
+        verdict = (
+            f"Openings are still <b>{pct:+.0f}% above</b> what the pre-COVID curve "
+            f"would predict at <b>{today_unrate:.1f}%</b> unemployment. The labor "
+            "market remains structurally tighter than its 2010s baseline — workers "
+            "and jobs are still being matched less efficiently than they used to."
+        )
+        verdict_color = PALETTE["risk_elevated"]
+    else:
+        verdict = (
+            f"Openings are <b>{pct:+.0f}% below</b> what the pre-COVID curve would "
+            f"predict at <b>{today_unrate:.1f}%</b> unemployment. The labor market "
+            "is showing structural slack relative to its 2010s norm."
+        )
+        verdict_color = PALETTE["risk_high"]
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-header"><span>Today\'s position</span></div>'
+        f'<div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        f"<p>Today: unemployment <b>{today_unrate:.1f}%</b>, openings "
+        f"<b>{today_openings:,.0f}k</b>. The closest pre-COVID month with similar "
+        f"unemployment had openings of <b>{baseline_openings:,.0f}k</b> "
+        f"({nearest_idx.strftime('%b %Y')}).</p>"
+        f'<p style="color:{verdict_color};">{verdict}</p>'
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _band(z: float) -> tuple[str, str]:

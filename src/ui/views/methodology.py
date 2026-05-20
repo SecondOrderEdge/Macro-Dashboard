@@ -83,6 +83,7 @@ def render(
     _yield_curve_section()
     _labor_section()
     _recession_section(ensemble)
+    _valuation_section()
     _composite_section()
     _calibration_section(ensemble)
     _walk_forward_section(ensemble, oos_history, oos_stats)
@@ -412,8 +413,34 @@ def _recession_section(ensemble: RecessionEnsemble | None) -> None:
 # ---------------------------------------------------------------- composite
 
 
+def _valuation_section() -> None:
+    _section_header("7. Valuation context · CAPE")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The Dashboard surfaces Robert Shiller's <b>cyclically-adjusted P/E ratio (CAPE)</b> "
+        "as a valuation context indicator. CAPE = S&P 500 price / 10-year inflation-adjusted "
+        "earnings; it has Shiller-mainstreamed roots back to 1871.</p>"
+        "<p><b>Why it's not a recession input.</b> Empirically CAPE has a poor "
+        "short-horizon recession-prediction record. It was elevated for most of 2014–2024 "
+        "without a recession arriving; including it in the probit ensemble would degrade "
+        "out-of-sample fit. The literature is unambiguous: CAPE predicts <i>10-year forward "
+        "real equity returns</i>, not 12-month recession probability.</p>"
+        "<p><b>Why we surface it anyway.</b> Valuation determines the <i>magnitude</i> of "
+        "potential equity damage conditional on a recession arriving. The same labor/credit/"
+        "curve signal looks very different for an investor at the 90th percentile of CAPE "
+        "than at the 30th percentile.</p>"
+        "<p><b>Source.</b> Fetched live from <a href=\"http://www.econ.yale.edu/~shiller/data.htm\" "
+        f'style="color:{PALETTE["accent"]};">Shiller\'s Yale page</a> (monthly, .xls); '
+        "percentile rank is computed against the post-1950 sample to avoid structural "
+        "breaks in the pre-WWII reporting cadence."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _composite_section() -> None:
-    _section_header("7. Composite construction")
+    _section_header("8. Composite construction")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -451,7 +478,7 @@ def _composite_section() -> None:
 
 
 def _calibration_section(ensemble: RecessionEnsemble | None) -> None:
-    _section_header("8. Calibration")
+    _section_header("9. Calibration")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -513,7 +540,7 @@ def _walk_forward_section(
     oos_stats: dict | None,
 ) -> None:
     """Out-of-sample backtest: how the model would have called recessions in real time."""
-    _section_header("9. Out-of-sample backtest")
+    _section_header("10. Out-of-sample backtest")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -656,7 +683,7 @@ def _render_coef_evolution(coef_hist: list[dict]) -> None:
 
 
 def _nber_section() -> None:
-    _section_header("10. NBER recession dates")
+    _section_header("11. NBER recession dates")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -684,7 +711,7 @@ def _nber_section() -> None:
 
 
 def _limitations() -> None:
-    _section_header("11. Limitations")
+    _section_header("12. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -747,7 +774,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("12. Reproducibility")
+    _section_header("13. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
