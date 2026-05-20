@@ -5,8 +5,24 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.data.series_registry import SERIES_REGISTRY
+from src.data.series_registry import SERIES_REGISTRY, label_for
 from src.models.lame import LAME
+
+
+def test_every_registry_series_has_a_plain_english_name():
+    for key, meta in SERIES_REGISTRY.items():
+        assert meta.get("name"), f"{key} is missing a plain-English name"
+
+
+def test_label_for_maps_keys_and_falls_back():
+    assert label_for("unrate") == "Unemployment Rate"
+    assert label_for("hy_oas") == "High-Yield Credit Spread (OAS)"
+    assert label_for("not_a_key") == "not_a_key"  # graceful fallback
+
+
+def test_lame_indicators_all_have_labels():
+    for key in LAME.INDICATORS:
+        assert label_for(key) != key, f"{key} has no registry label"
 
 
 def test_zscores_normalized(synthetic_panel):

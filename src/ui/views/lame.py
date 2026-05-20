@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from src.data.series_registry import label_for
 from src.models.lame import LAME
 from src.ui.components import (
     add_recession_shading,
@@ -106,6 +107,9 @@ def _render_breakdown(model: LAME) -> None:
     if df.empty:
         return
 
+    # Map registry keys (unrate, icsa, …) to plain-English names for display.
+    df["label"] = df["name"].map(label_for)
+
     # Sort by absolute z-score so every indicator (even those with missing
     # contribution at the reference date) gets ranked sensibly.
     df = df.iloc[df["z_score"].abs().fillna(-1).sort_values(ascending=False).index].reset_index(drop=True)
@@ -116,7 +120,7 @@ def _render_breakdown(model: LAME) -> None:
     fig.add_trace(
         go.Bar(
             x=z_vals,
-            y=df["name"],
+            y=df["label"],
             orientation="h",
             marker=dict(color=colors, line=dict(width=0)),
             hovertemplate=(
@@ -140,7 +144,7 @@ def _render_breakdown(model: LAME) -> None:
 
     # Compact table: each indicator shows its own latest value + date, then the
     # weight/contribution computed at the reference date.
-    display = df[["name", "as_of", "current_value", "z_score", "weight", "contribution"]].copy()
+    display = df[["label", "as_of", "current_value", "z_score", "weight", "contribution"]].copy()
     display["as_of"] = display["as_of"].map(
         lambda d: pd.to_datetime(d).strftime("%Y-%m") if pd.notna(d) else "—"
     )
@@ -408,7 +412,7 @@ def _render_small_multiples(model: LAME, nber: pd.Series) -> None:
     # below them; bump rendered row height to give each chart breathing room.
     fig = make_subplots(
         rows=n_rows, cols=n_cols,
-        subplot_titles=[c.upper() for c in cols],
+        subplot_titles=[label_for(c) for c in cols],
         shared_yaxes=False,
         horizontal_spacing=0.05, vertical_spacing=0.25,
     )
