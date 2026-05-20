@@ -496,11 +496,25 @@ def _row_valuation_cape(nber: pd.Series) -> None:
     )
 
     if cape is None or cape.empty:
+        log = (cape.attrs.get("fetch_log") if cape is not None else None) or []
+        log_html = ""
+        if log:
+            items = "".join(f"<li>{ln}</li>" for ln in log)
+            log_html = (
+                f'<details style="margin-top:8px;color:{PALETTE["text_tiny"]};font-size:11px;">'
+                "<summary>fetch attempts</summary>"
+                f'<ul style="margin:6px 0 0 18px;padding:0;">{items}</ul>'
+                "</details>"
+            )
         st.markdown(
             f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_muted"]};">'
-            "CAPE data temporarily unavailable. Source: "
+            "CAPE data temporarily unavailable. Primary source: "
+            '<a href="https://github.com/datasets/s-and-p-500" '
+            f'style="color:{PALETTE["accent"]};">datasets/s-and-p-500</a>'
+            " · fallback: "
             '<a href="http://www.econ.yale.edu/~shiller/data.htm" '
             f'style="color:{PALETTE["accent"]};">Robert Shiller / Yale</a>.'
+            f"{log_html}"
             "</div></div>",
             unsafe_allow_html=True,
         )
@@ -526,7 +540,12 @@ def _row_valuation_cape(nber: pd.Series) -> None:
 
     with left:
         spark = sparkline_svg(cape.tail(300).values, color=color)
-        subline = f"{pct:.0f}th percentile since 1950 · as of {summary['as_of'].strftime('%b %Y')}"
+        months_stale = (pd.Timestamp.today() - summary["as_of"]).days // 30
+        staleness = "" if months_stale <= 2 else f" · {months_stale}mo stale"
+        subline = (
+            f"{pct:.0f}th percentile since 1950 · "
+            f"as of {summary['as_of'].strftime('%b %Y')}{staleness}"
+        )
         st.markdown(
             metric_card(
                 label="Shiller CAPE",
@@ -631,9 +650,11 @@ def _row_valuation_cape(nber: pd.Series) -> None:
         "does arrive.</p>"
         f"<p>{verdict}</p>"
         f'<p style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:8px;">'
-        'Source: <a href="http://www.econ.yale.edu/~shiller/data.htm" '
-        f'style="color:{PALETTE["accent"]};">Robert Shiller</a> · '
-        "monthly · fetched live."
+        'Sources: <a href="http://www.econ.yale.edu/~shiller/data.htm" '
+        f'style="color:{PALETTE["accent"]};">Robert Shiller / Yale</a> (primary, fresh) and '
+        '<a href="https://github.com/datasets/s-and-p-500" '
+        f'style="color:{PALETTE["accent"]};">datasets/s-and-p-500</a> (fallback, long history). '
+        f'<span style="color:{PALETTE["text_tiny"]};">data path: {summary.get("source", "?")}</span>'
         "</p>"
         "</div></div>",
         unsafe_allow_html=True,
