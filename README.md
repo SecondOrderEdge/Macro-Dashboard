@@ -51,11 +51,9 @@ streamlit run app.py
 
 The first load fetches ~30 series from FRED and fits the ensemble; subsequent loads come from Streamlit's cache for six hours. Tests run with `pytest` and do not require network access.
 
-## How it differs from Street estimates
+## Recession page — five-model probit ensemble
 
-Pure yield-curve models (NY Fed) tend to print higher than us when the curve is inverted but labor and credit are calm — we discount the curve signal by ensembling against four other lenses. Pure equity-vol or growth-momentum estimates (Goldman) tend to print lower when the curve is inverted but everything else looks fine — we lift their reading by including the curve. The composite's job is not to be the best single indicator; it is to be the indicator that disagrees least with the rest of the dashboard when you click through.
-
-The Street comparison values in *vs. Street* live in `data/street_estimates.csv` and are maintained manually. They are a sanity-check, not a benchmark.
+The Recession page runs five methodologically distinct, academically grounded models over a shared FRED universe and averages them: **NY Fed** (term-spread probit), **Wright** (spread + fed funds), **BIC-selected** (sign-constrained multivariate probit), **Estrella–Mishkin** (closed form), and **Chauvet–Piger** (FRED's smoothed Markov-switching series `RECPROUSM156N`). It also reports a bootstrap 90% CI, per-indicator watchlist trigger levels, and a 24-month trend attribution. Every model probability is computed live from FRED — there are no hand-entered comparison values.
 
 ## Data notes
 

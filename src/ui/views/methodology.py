@@ -752,11 +752,12 @@ def _limitations() -> None:
             "unemployment and is not revised after release.",
         ),
         (
-            "Street estimates · partly automated.",
-            "<b>NY Fed</b> probability is pulled live from FRED "
-            "(<code>RECPROUSM156N</code>, the Chauvet–Piger smoothed model published by "
-            "St Louis Fed). <b>Cleveland Fed, Bloomberg, Goldman</b> are still maintained "
-            "by hand because their probabilities aren't published as machine-readable feeds.",
+            "Model comparison · fully live.",
+            "The Recession page's five-model comparison (NY Fed, Wright, BIC-selected, "
+            "Estrella–Mishkin, Chauvet–Piger) is computed live from FRED on every rebuild — "
+            "no hand-entered street estimates. The Chauvet–Piger reading is FRED's smoothed "
+            "Markov-switching series (<code>RECPROUSM156N</code>); the others are probit "
+            "specifications re-estimated on the FRED panel.",
         ),
         (
             "Composite weights · interactive.",

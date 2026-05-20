@@ -14,6 +14,7 @@ from src.data.series_registry import fred_ids
 from src.models.composite import composite_risk
 from src.models.lame import LAME
 from src.models.recession_ensemble import RecessionEnsemble
+from src.models.recession_probit import compute_probit_report
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
 from src.ui.views import curve, dashboard, methodology, recession
@@ -81,6 +82,13 @@ def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
     )
     oos_stats = ensemble.oos_calibration_stats(oos_history, fwd)
 
+    # Five-model academic probit ensemble (powers the Recession page). Isolated
+    # in a try/except so a probit-side failure can't take down the whole app.
+    try:
+        probit = compute_probit_report()
+    except Exception as exc:  # noqa: BLE001
+        probit = {"error": str(exc)}
+
     return {
         "ensemble": ensemble,
         "lame": lame,
@@ -90,6 +98,7 @@ def _build_models(cache_version: str, exclude_pandemic: bool = True) -> dict:
         "oos_history": oos_history,
         "oos_stats": oos_stats,
         "exclude_pandemic": exclude_pandemic,
+        "probit": probit,
     }
 
 
@@ -194,7 +203,7 @@ def main() -> None:
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
             models = _build_models(
-                "v8-wage-weighted",
+                "v9-probit-ensemble",
                 exclude_pandemic=st.session_state.get("exclude_pandemic", True),
             )
     except Exception as exc:
@@ -212,7 +221,7 @@ def main() -> None:
     if selected == "Macro Dashboard":
         dashboard.render(models["ensemble"], models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
-        recession.render(models["ensemble"], models["nber"], models["panel"])
+        recession.render(models.get("probit"), models["nber"])
     elif selected == "Labor":
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":

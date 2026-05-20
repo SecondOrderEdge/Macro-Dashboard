@@ -1,8 +1,14 @@
-"""Recession ensemble view: Under the Hood / The Reading / vs. Street."""
+"""Recession page — five-model academic probit ensemble.
+
+Three tabs surface the same analytics the weekly investment-committee email
+reports: The Reading (headline + history + drivers), Under the Hood (the five
+models, comparison, bootstrap CI, indicator percentiles), and Watchlist
+(trigger levels, adverse scenario, what-would-change-our-view).
+
+The report dict is produced by :mod:`src.models.recession_probit`.
+"""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,46 +16,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-from src.models.recession_ensemble import RecessionEnsemble, SUBMODELS
+from src.models.recession_probit import THRESHOLD_ELEVATED, THRESHOLD_WARNING
 from src.ui.components import (
     add_recession_shading,
     apply_template,
-    line_chart,
     metric_card,
-    reliability_diagram,
     sparkline_svg,
 )
 from src.ui.theme import PALETTE
-
-
-_STREET_PATH = Path(__file__).resolve().parents[3] / "data" / "street_estimates.csv"
-
-
-def render(model: RecessionEnsemble, nber: pd.Series, panel: pd.DataFrame | None = None) -> None:
-    try:
-        current = model.predict_current()
-        history = model.predict_history()
-        calibration = model.calibration_stats()
-    except RuntimeError as exc:
-        st.error(f"Recession ensemble not ready: {exc}")
-        return
-
-    selected = option_menu(
-        menu_title=None,
-        options=["Under the Hood", "The Reading", "vs. Street"],
-        icons=["sliders", "graph-up", "bar-chart"],
-        orientation="horizontal",
-        default_index=1,
-        key="recession_tab",
-        styles=_TAB_STYLES,
-    )
-
-    if selected == "Under the Hood":
-        _render_under_hood(model, current, history, calibration)
-    elif selected == "The Reading":
-        _render_reading(current, history, nber)
-    else:
-        _render_vs_street(current, panel)
 
 
 _TAB_STYLES = {
@@ -70,224 +44,55 @@ _TAB_STYLES = {
 }
 
 
-# ----------------------------------------------------------------- Under the Hood
-
-
-def _render_under_hood(model: RecessionEnsemble, current: dict, history: pd.DataFrame, calibration: dict) -> None:
-    submodel_probs = current["submodels"]
-    cols = st.columns(5)
-    for col, spec in zip(cols, SUBMODELS):
-        if spec.name not in submodel_probs:
-            continue
-        prob = submodel_probs[spec.name]
-        color = PALETTE["submodel"][spec.name]
-        spark_series = history[spec.name].dropna().tail(180) if spec.name in history.columns else None
-        spark = sparkline_svg(spark_series.values, color=color) if spark_series is not None and len(spark_series) else ""
-        with col:
-            st.markdown(
-                metric_card(
-                    label=spec.label,
-                    value=f"{prob:.0f}",
-                    unit="%",
-                    risk_color_hex=color,
-                    sparkline_html=spark,
-                    subline="12m forward probability",
-                ),
-                unsafe_allow_html=True,
-            )
-
-    st.markdown(
-        '<div class="label-small" style="margin-top:16px;">Feature contributions · current observation</div>',
-        unsafe_allow_html=True,
-    )
-    contributions: list[tuple[str, str, float, str]] = []
-    for spec in SUBMODELS:
-        drivers = current["drivers"].get(spec.name, [])
-        color = PALETTE["submodel"][spec.name]
-        for feat_name, contrib_pp in drivers:
-            contributions.append((spec.label, feat_name, contrib_pp, color))
-
-    if contributions:
-        df = pd.DataFrame(contributions, columns=["submodel", "feature", "contribution", "color"])
-        df = df.iloc[df["contribution"].abs().sort_values(ascending=False).index].head(15).reset_index(drop=True)
-        fig = go.Figure(
-            go.Bar(
-                x=df["contribution"],
-                y=[f"{r['feature']}  ·  {r['submodel']}" for _, r in df.iterrows()],
-                orientation="h",
-                marker=dict(color=df["color"], line=dict(width=0)),
-                hovertemplate="%{y}<br>contribution: %{x:+.2f} pp<extra></extra>",
-            )
-        )
-        fig.add_vline(x=0, line=dict(color="#3d4754", width=1))
-        fig.update_xaxes(title="Contribution to probability (pp)")
-        fig.update_yaxes(autorange="reversed")
-        apply_template(fig, height=420, show_legend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    left, right = st.columns([2, 1])
-    with left:
-        st.markdown('<div class="label-small">Reliability diagram</div>', unsafe_allow_html=True)
-        fig = reliability_diagram(calibration.get("reliability_curve", pd.DataFrame()))
-        st.plotly_chart(fig, use_container_width=True)
-    with right:
-        brier = calibration.get("brier", float("nan"))
-        auc = calibration.get("auc", float("nan"))
-        rows = [
-            ("Brier score", f"{brier:.4f}" if not np.isnan(brier) else "—"),
-            ("AUC", f"{auc:.3f}" if not np.isnan(auc) else "—"),
-            ("Fitted submodels", f"{len(submodel_probs)} / 5"),
-            ("Sample start", str(model.START_DATE.date())),
-        ]
-        body = "".join(
-            f'<div class="submodel-row"><span class="name">{label}</span>'
-            f'<span class="value">{value}</span></div>'
-            for label, value in rows
-        )
-        st.markdown(
-            '<div class="panel"><div class="panel-header"><span>Calibration</span></div>'
-            f'<div class="panel-body">{body}</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    _render_submodel_divergence(history)
-    _render_rolling_brier(model, history)
-
-
-def _render_submodel_divergence(history: pd.DataFrame) -> None:
-    """Show the spread (max minus min) of submodel probabilities over time.
-
-    A tight spread means all five lenses agree; a wide spread means the
-    ensemble is hedging across material disagreement. Wide spreads
-    historically precede regime shifts — they're a signal of fragility, not
-    just noise.
-    """
-    submodel_cols = [c for c in history.columns if c != "ensemble"]
-    if not submodel_cols:
+def render(report: dict | None, nber: pd.Series) -> None:
+    if not report:
+        st.error("The recession probit ensemble is unavailable (no report was built).")
         return
-    sub = history[submodel_cols].dropna(how="all")
-    if sub.empty:
+    if "error" in report:
+        st.error(f"Recession probit ensemble failed to build: {report['error']}")
         return
 
-    high = sub.max(axis=1)
-    low = sub.min(axis=1)
-    spread = (high - low).dropna()
-    ensemble = history["ensemble"].dropna() if "ensemble" in history.columns else pd.Series(dtype=float)
-
-    st.markdown(
-        '<div class="label-small" style="margin-top:24px;">Submodel divergence · range across the 5 lenses</div>',
-        unsafe_allow_html=True,
+    selected = option_menu(
+        menu_title=None,
+        options=["The Reading", "Under the Hood", "Watchlist"],
+        icons=["graph-up", "sliders", "bullseye"],
+        orientation="horizontal",
+        default_index=0,
+        key="recession_tab",
+        styles=_TAB_STYLES,
     )
 
-    fig = go.Figure()
-    # Filled max/min band
-    fig.add_trace(
-        go.Scatter(
-            x=high.index, y=high.values, mode="lines",
-            line=dict(color=PALETTE["text_tiny"], width=0),
-            name="max submodel", hoverinfo="skip", showlegend=False,
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=low.index, y=low.values, mode="lines",
-            line=dict(color=PALETTE["text_tiny"], width=0),
-            fill="tonexty", fillcolor=_fade(PALETTE["text_muted"], 0.20),
-            name="submodel range",
-            hovertemplate="%{x|%b %Y}<extra>range</extra>",
-        )
-    )
-    if not ensemble.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=ensemble.index, y=ensemble.values, mode="lines",
-                line=dict(color=PALETTE["accent"], width=1.6),
-                name="Ensemble",
-                hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>Ensemble</extra>",
-            )
-        )
-    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
-    apply_template(fig, height=320)
-    st.plotly_chart(fig, use_container_width=True)
-
-    latest_spread = float(spread.iloc[-1]) if not spread.empty else float("nan")
-    median_spread = float(spread.median()) if not spread.empty else float("nan")
-    p90_spread = float(spread.quantile(0.9)) if not spread.empty else float("nan")
-    verdict = (
-        "Submodels are in broad agreement — the ensemble reading is high-conviction."
-        if latest_spread < median_spread else
-        "Submodels disagree by more than the historical median — read the ensemble cautiously."
-        if latest_spread < p90_spread else
-        "Submodel disagreement is in the top decile of history — the ensemble is hedging across very different signals."
-    )
-    st.markdown(
-        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
-        f"Current spread (max − min): <b>{latest_spread:.0f}pp</b>. "
-        f"Historical median: {median_spread:.0f}pp · 90th percentile: {p90_spread:.0f}pp. {verdict}"
-        "</div></div>",
-        unsafe_allow_html=True,
-    )
+    if selected == "The Reading":
+        _render_reading(report, nber)
+    elif selected == "Under the Hood":
+        _render_under_hood(report)
+    else:
+        _render_watchlist(report)
 
 
-def _render_rolling_brier(model: RecessionEnsemble, history: pd.DataFrame) -> None:
-    """Rolling 10-year Brier vs the unconditional base-rate baseline."""
-    target = getattr(model, "_target", None)
-    if target is None or "ensemble" not in history.columns:
-        return
-    pred = (history["ensemble"] / 100.0).dropna()
-    y = target.astype(float)
-    aligned = pd.concat([pred.rename("p"), y.rename("y")], axis=1).dropna()
-    if len(aligned) < 120:
-        return
+# --------------------------------------------------------------- shared helpers
 
-    err = (aligned["p"] - aligned["y"]) ** 2
-    rolling_brier = err.rolling(120, min_periods=60).mean()
 
-    # Baseline: at each date, predict the in-window base rate.
-    rolling_base_rate = aligned["y"].rolling(120, min_periods=60).mean()
-    baseline_err = (rolling_base_rate - aligned["y"]) ** 2
-    rolling_baseline = baseline_err.rolling(120, min_periods=60).mean()
+def _prob_color(p: float) -> str:
+    if not np.isfinite(p):
+        return PALETTE["text_muted"]
+    if p < 20:
+        return PALETTE["risk_low"]
+    if p < THRESHOLD_WARNING:
+        return PALETTE["risk_elevated"]
+    if p < THRESHOLD_ELEVATED:
+        return PALETTE["risk_high"]
+    return PALETTE["risk_critical"]
 
-    st.markdown(
-        '<div class="label-small" style="margin-top:24px;">Rolling 10-year Brier score · ensemble vs unconditional base-rate baseline</div>',
-        unsafe_allow_html=True,
-    )
 
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=rolling_baseline.index, y=rolling_baseline.values, mode="lines",
-            line=dict(color=PALETTE["text_muted"], width=1.0, dash="dot"),
-            name="Base-rate baseline",
-            hovertemplate="%{x|%b %Y}<br>%{y:.4f}<extra>baseline</extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=rolling_brier.index, y=rolling_brier.values, mode="lines",
-            line=dict(color=PALETTE["accent"], width=1.4),
-            name="Ensemble Brier",
-            hovertemplate="%{x|%b %Y}<br>%{y:.4f}<extra>ensemble</extra>",
-        )
-    )
-    fig.update_yaxes(title="Brier (lower = better)")
-    apply_template(fig, height=320)
-    st.plotly_chart(fig, use_container_width=True)
-
-    latest_brier = float(rolling_brier.dropna().iloc[-1]) if rolling_brier.dropna().size else float("nan")
-    latest_base = float(rolling_baseline.dropna().iloc[-1]) if rolling_baseline.dropna().size else float("nan")
-    if np.isfinite(latest_brier) and np.isfinite(latest_base):
-        skill = (1 - latest_brier / latest_base) * 100
-        st.markdown(
-            f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
-            f"In the most recent 10-year window the ensemble's Brier is <b>{latest_brier:.4f}</b> vs "
-            f"<b>{latest_base:.4f}</b> for an unconditional base-rate forecaster — a <b>{skill:+.0f}%</b> "
-            "skill score relative to the no-information baseline. Persistent dips below the dotted line "
-            "indicate windows in which the ensemble materially out-predicted the base rate; periods "
-            "where the two lines converge are windows in which forecastable structure was weaker."
-            "</div></div>",
-            unsafe_allow_html=True,
-        )
+def _consistent_with(p: float) -> str:
+    if p < 20:
+        return "expansion-phase conditions"
+    if p < THRESHOLD_WARNING:
+        return "late-cycle conditions worth monitoring"
+    if p < THRESHOLD_ELEVATED:
+        return "elevated, transition-phase risk"
+    return "conditions that historically precede contraction"
 
 
 def _fade(hex_color: str, alpha: float) -> str:
@@ -296,174 +101,360 @@ def _fade(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def _direction(report: dict) -> str:
+    ta = report.get("trend_attribution") or {}
+    change = ta.get("prob_change_pp")
+    if change is None:
+        return "stable"
+    if change > 2:
+        return "rising"
+    if change < -2:
+        return "falling"
+    return "stable"
+
+
 # ----------------------------------------------------------------- The Reading
 
 
-def _render_reading(current: dict, history: pd.DataFrame, nber: pd.Series) -> None:
-    ensemble_now = current["ensemble"]
-    submodels = current["submodels"]
+def _render_reading(report: dict, nber: pd.Series) -> None:
+    ens = report["ensemble_probability"]
+    color = _prob_color(ens)
+    lo, hi = report.get("ci_lower"), report.get("ci_upper")
+    probs = report["model_probabilities"]
+    p_lo, p_hi = min(probs.values()), max(probs.values())
 
-    if "ensemble" in history.columns:
-        fig = line_chart(
-            history["ensemble"].rename("Ensemble"),
-            color=PALETTE["accent"],
-            height=420,
-            nber=nber,
-            fill=True,
-            yaxis_title="Recession probability (%)",
-        )
-        fig.add_hline(y=50, line=dict(color="#3d4754", width=1, dash="dot"))
-        st.plotly_chart(fig, use_container_width=True)
+    ci_txt = (
+        f"90% CI {lo:.0f}–{hi:.0f}%" if lo is not None and hi is not None else "CI unavailable"
+    )
+    spark = sparkline_svg(
+        report["ensemble_history"].tail(60).values, color=color, width=240, height=44
+    )
 
     left, right = st.columns([1, 1])
     with left:
+        st.markdown(
+            metric_card(
+                label="12-month recession probability · 5-model ensemble",
+                value=f"{ens:.0f}",
+                unit="%",
+                risk_color_hex=color,
+                sparkline_html=spark,
+                badge=report["signal"],
+                subline=f"{ci_txt} · models range {p_lo:.0f}–{p_hi:.0f}% · consensus {report['consensus']}",
+            ),
+            unsafe_allow_html=True,
+        )
+    with right:
+        meta = report["model_metadata"]
+        rows = [
+            ("Direction (24m)", _direction(report)),
+            ("Data through", report["data_through"]),
+            ("Training window", f"{meta['training_start']} → {meta['training_end']}"),
+            ("Pseudo R²", f"{meta['pseudo_r2']:.3f}"),
+            ("BIC features", f"{len(report['bic_selected_features'])}"),
+        ]
+        body = "".join(
+            f'<div class="submodel-row"><span class="name">{k}</span>'
+            f'<span class="value">{v}</span></div>'
+            for k, v in rows
+        )
+        st.markdown(
+            '<div class="panel"><div class="panel-header"><span>Snapshot</span></div>'
+            f'<div class="panel-body">{body}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # History: ensemble + BIC fitted, NBER shaded.
+    ens_hist = report["ensemble_history"]
+    bic_hist = report["bic_history"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=bic_hist.index, y=bic_hist.values, mode="lines",
+            line=dict(color=PALETTE["text_muted"], width=1, dash="dot"),
+            name="BIC-selected",
+            hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>BIC</extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ens_hist.index, y=ens_hist.values, mode="lines",
+            line=dict(color=PALETTE["accent"], width=1.6),
+            fill="tozeroy", fillcolor=_fade(PALETTE["accent"], 0.12),
+            name="5-model ensemble",
+            hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>Ensemble</extra>",
+        )
+    )
+    fig.add_hline(y=THRESHOLD_ELEVATED, line=dict(color=PALETTE["risk_critical"], width=1, dash="dash"))
+    fig.add_hline(y=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
+    add_recession_shading(fig, nber)
+    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
+    apply_template(fig, height=380)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Plain-English read + trend attribution.
+    c1, c2 = st.columns([1, 1])
+    with c1:
         st.markdown('<div class="label-small">Today\'s read</div>', unsafe_allow_html=True)
-        text = _plain_english(ensemble_now, submodels)
         st.markdown(
             f'<div class="panel"><div class="panel-body" '
             f'style="font-family:\'Fraunces\',serif;font-size:15px;line-height:1.7;color:{PALETTE["text_primary"]};">'
-            f"{text}</div></div>",
+            f"{_reading_text(report)}</div></div>",
             unsafe_allow_html=True,
         )
-
-    with right:
-        st.markdown('<div class="label-small">Driver decomposition</div>', unsafe_allow_html=True)
-        push_up, pull_down = _split_drivers(current.get("drivers", {}))
-        watch_next = _watch_next(submodels)
-        block = _driver_block("Push up", push_up, PALETTE["risk_high"])
-        block += _driver_block("Pull down", pull_down, PALETTE["risk_low"])
-        block += _driver_block("Watch next", watch_next, PALETTE["accent"])
+    with c2:
+        st.markdown('<div class="label-small">What moved the probability (24m)</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div class="panel"><div class="panel-body">{block}</div></div>',
+            f'<div class="panel"><div class="panel-body">{_attribution_block(report)}</div></div>',
             unsafe_allow_html=True,
         )
 
 
-def _driver_block(title: str, items: list[tuple[str, str]], color: str) -> str:
-    rows = "".join(
-        f'<div class="submodel-row"><span class="name">{name}</span>'
-        f'<span class="value" style="color:{color};">{value}</span></div>'
-        for name, value in items
-    ) or '<div class="submodel-row"><span class="name">—</span><span class="value">—</span></div>'
-    return (
-        f'<div style="margin-bottom:10px;">'
-        f'<div class="label-tiny" style="margin-bottom:4px;">{title}</div>'
-        f"{rows}</div>"
-    )
-
-
-def _plain_english(ensemble_now: float, submodels: dict[str, float]) -> str:
-    if not np.isfinite(ensemble_now):
-        return "The ensemble could not be evaluated for the most recent observation."
-    band = (
-        "subdued" if ensemble_now < 20
-        else "elevated" if ensemble_now < 40
-        else "high" if ensemble_now < 60
-        else "extreme"
-    )
-    spread = max(submodels.values()) - min(submodels.values()) if submodels else 0.0
-    agree = "broad agreement" if spread < 15 else "noticeable disagreement"
-    top = max(submodels, key=submodels.get) if submodels else None
-    bottom = min(submodels, key=submodels.get) if submodels else None
+def _reading_text(report: dict) -> str:
+    ens = report["ensemble_probability"]
+    probs = report["model_probabilities"]
+    p_lo, p_hi = min(probs.values()), max(probs.values())
+    consensus = report["consensus"].lower()
     parts = [
-        f"The 12-month forward recession probability is <b>{ensemble_now:.0f}%</b>, "
-        f"which we classify as <b>{band}</b>."
+        f"Our five-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
+        f"recession within 12 months — consistent with <b>{_consistent_with(ens)}</b>."
     ]
-    if top and bottom and top != bottom:
-        parts.append(
-            f"There is {agree} across submodels: the <b>{top}</b> reading sits at "
-            f"{submodels[top]:.0f}% while <b>{bottom}</b> sits at {submodels[bottom]:.0f}%."
-        )
+    lo, hi = report.get("ci_lower"), report.get("ci_upper")
+    if lo is not None and hi is not None:
+        parts.append(f"The BIC model's bootstrap 90% interval spans {lo:.0f}–{hi:.0f}%.")
     parts.append(
-        "Submodel divergence is informative — when the curve and credit lenses disagree, "
-        "the ensemble's hedged answer tends to be more accurate than either alone."
+        f"Individual models range from {p_lo:.0f}% to {p_hi:.0f}%, "
+        f"a {consensus} consensus across specifications."
     )
+    ta = report.get("trend_attribution") or {}
+    if "prob_change_pp" in ta:
+        ch = ta["prob_change_pp"]
+        verb = "risen" if ch > 0 else "fallen" if ch < 0 else "held"
+        parts.append(f"Over the past 24 months the BIC reading has {verb} by {abs(ch):.0f}pp.")
     return " ".join(parts)
 
 
-def _split_drivers(drivers: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    flat: list[tuple[str, float]] = []
-    for sub, items in drivers.items():
-        for feat, contrib in items:
-            flat.append((feat, contrib))
-    flat.sort(key=lambda t: t[1], reverse=True)
-    push_up = [(name, f"+{v:.2f} pp") for name, v in flat if v > 0][:3]
-    pull_down = [(name, f"{v:.2f} pp") for name, v in flat if v < 0][-3:][::-1]
-    return push_up, pull_down
+def _attribution_block(report: dict) -> str:
+    ta = report.get("trend_attribution") or {}
+    effects = ta.get("partial_effects")
+    if not effects:
+        return '<div class="submodel-row"><span class="name">—</span><span class="value">attribution unavailable</span></div>'
+    ordered = sorted(effects.items(), key=lambda x: x[1], reverse=True)
+    up = [(f, v) for f, v in ordered if v > 0][:3]
+    down = [(f, v) for f, v in ordered if v < 0][-3:][::-1]
+
+    def rows(items, col):
+        if not items:
+            return '<div class="submodel-row"><span class="name">—</span><span class="value">—</span></div>'
+        return "".join(
+            f'<div class="submodel-row"><span class="name">{f}</span>'
+            f'<span class="value" style="color:{col};">{v:+.1f} pp</span></div>'
+            for f, v in items
+        )
+
+    return (
+        '<div style="margin-bottom:10px;"><div class="label-tiny" style="margin-bottom:4px;">Pushed risk up</div>'
+        f"{rows(up, PALETTE['risk_high'])}</div>"
+        '<div><div class="label-tiny" style="margin-bottom:4px;">Pulled risk down</div>'
+        f"{rows(down, PALETTE['risk_low'])}</div>"
+    )
 
 
-def _watch_next(submodels: dict[str, float]) -> list[tuple[str, str]]:
-    if not submodels:
-        return []
-    sorted_subs = sorted(submodels.items(), key=lambda t: t[1], reverse=True)
-    return [(name, f"{val:.0f}%") for name, val in sorted_subs[:3]]
+# ----------------------------------------------------------------- Under the Hood
 
 
-# ----------------------------------------------------------------- vs. Street
+def _render_under_hood(report: dict) -> None:
+    probs = report["model_probabilities"]
+    ens = report["ensemble_probability"]
 
+    # Model cards: ensemble first, then the five specifications.
+    order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin", "Chauvet-Piger"]
+    cards = [("5-model ensemble", ens, True)] + [
+        (name, probs[name], False) for name in order if name in probs
+    ]
+    cols = st.columns(len(cards))
+    for col, (name, val, is_ens) in zip(cols, cards):
+        with col:
+            st.markdown(
+                metric_card(
+                    label=name,
+                    value=f"{val:.0f}",
+                    unit="%",
+                    risk_color_hex=PALETTE["accent"] if is_ens else _prob_color(val),
+                    subline="ensemble" if is_ens else "12m probability",
+                ),
+                unsafe_allow_html=True,
+            )
 
-def _render_vs_street(current: dict, panel: pd.DataFrame | None = None) -> None:
-    ensemble_now = current["ensemble"]
-    try:
-        street = pd.read_csv(_STREET_PATH, parse_dates=["date"])
-    except FileNotFoundError:
-        st.info("Street estimates file not found.")
-        return
-    if street.empty:
-        st.info("No street estimates available.")
-        return
-
-    latest = street.sort_values("date").iloc[-1]
-
-    # Live NY Fed-style probability from FRED (Chauvet-Piger smoothed series).
-    ny_fed_live = float("nan")
-    ny_fed_label = "NY Fed (CSV)"
-    ny_fed_asof = ""
-    if panel is not None and "RECPROUSM156N" in panel.columns:
-        from src.models.external import ny_fed_probability
-        ny_series = ny_fed_probability(panel)
-        if not ny_series.empty:
-            ny_fed_live = float(ny_series.iloc[-1])
-            ny_fed_label = "NY Fed (live · FRED)"
-            ny_fed_asof = f" · as of {ny_series.index[-1].strftime('%b %Y')}"
-
-    rows = {
-        "This ensemble": ensemble_now,
-        ny_fed_label: ny_fed_live if np.isfinite(ny_fed_live) else float(latest["ny_fed"]),
-        "Cleveland Fed": float(latest["cleveland_fed"]),
-        "Bloomberg": float(latest["bloomberg"]),
-        "Goldman Sachs": float(latest["goldman"]),
-    }
-    series = pd.Series(rows).sort_values()
-
-    colors = [PALETTE["accent"] if name == "This ensemble" else PALETTE["text_muted"] for name in series.index]
+    # Model comparison bar.
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">Model comparison · do the specifications agree?</div>',
+        unsafe_allow_html=True,
+    )
+    s = pd.Series(probs).sort_values()
+    colors = [PALETTE["accent"] if n == "BIC-selected" else PALETTE["text_muted"] for n in s.index]
     fig = go.Figure(
         go.Bar(
-            x=series.values,
-            y=series.index,
-            orientation="h",
+            x=s.values, y=s.index, orientation="h",
             marker=dict(color=colors, line=dict(width=0)),
-            text=[f"{v:.0f}%" for v in series.values],
-            textposition="outside",
+            text=[f"{v:.0f}%" for v in s.values], textposition="outside",
             textfont=dict(color=PALETTE["text_primary"]),
             hovertemplate="%{y}: %{x:.0f}%<extra></extra>",
         )
     )
-    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(series.max() * 1.25, 50)])
-    apply_template(fig, height=320, show_legend=False)
+    fig.add_vline(x=ens, line=dict(color=PALETTE["accent"], width=1, dash="dash"))
+    fig.add_vline(x=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
+    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(s.max() * 1.25, 40)])
+    apply_template(fig, height=300, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown(
-        f'<div class="panel"><div class="panel-header"><span>How to read this</span></div>'
-        f'<div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
-        f"<b>NY Fed</b> is pulled live from FRED (<code>RECPROUSM156N</code>, the "
-        "Chauvet–Piger smoothed model published by St Louis Fed){ny_fed_asof}. "
-        "<b>Cleveland Fed, Bloomberg, Goldman</b> are still maintained by hand in "
-        "<code>data/street_estimates.csv</code> — their underlying probabilities are not "
-        "published as machine-readable feeds. Our ensemble tends to print below the Fed "
-        "yield-curve models because labor and credit conditions damp the curve signal, "
-        "and above pure equity-vol indicators when sentiment is unusually calm relative "
-        "to the rates picture."
+        f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
+        "All five probabilities are computed live from FRED — none are hand-entered. "
+        "<b>NY Fed</b> and <b>Estrella-Mishkin</b> use the 10y-3m term spread; <b>Wright</b> adds the fed funds rate; "
+        "<b>BIC-selected</b> is a sign-constrained multivariate probit; <b>Chauvet-Piger</b> is FRED's smoothed "
+        "Markov-switching series (<code>RECPROUSM156N</code>). The ensemble is their equal-weighted average."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Indicator percentile dashboard (BIC features).
+    _render_percentiles(report)
+
+
+def _render_percentiles(report: dict) -> None:
+    readings = report["indicator_readings"]
+    if not readings:
+        return
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">Indicator dashboard · where each BIC driver sits historically</div>',
+        unsafe_allow_html=True,
+    )
+    feats = list(readings.keys())
+    pctiles = [readings[f]["percentile"] for f in feats]
+    labels = [f"{f}  ·  {readings[f]['category']}" for f in feats]
+
+    def color(p):
+        if p <= 10 or p >= 90:
+            return PALETTE["risk_critical"]
+        if p <= 25 or p >= 75:
+            return PALETTE["risk_elevated"]
+        return PALETTE["risk_low"]
+
+    fig = go.Figure(
+        go.Bar(
+            x=pctiles, y=labels, orientation="h",
+            marker=dict(color=[color(p) for p in pctiles], line=dict(width=0)),
+            text=[f"{p:.0f}th" for p in pctiles], textposition="outside",
+            textfont=dict(color=PALETTE["text_primary"]),
+            hovertemplate="%{y}: %{x:.0f}th percentile<extra></extra>",
+        )
+    )
+    fig.add_vline(x=50, line=dict(color=PALETTE["text_muted"], width=1, dash="dash"))
+    fig.update_xaxes(title="Historical percentile", range=[0, 108])
+    fig.update_yaxes(autorange="reversed")
+    apply_template(fig, height=max(260, len(feats) * 48), show_legend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ----------------------------------------------------------------- Watchlist
+
+
+def _render_watchlist(report: dict) -> None:
+    sens = report.get("sensitivity") or []
+    if not sens:
+        st.info("No watchlist data available.")
+        return
+
+    # Rank by proximity to the 30% trigger (closest first).
+    def distance_key(s):
+        d = s.get("distance_30")
+        return abs(d) if d is not None else float("inf")
+
+    ranked = sorted(sens, key=distance_key)
+
+    st.markdown(
+        '<div class="label-small">Watchlist · how far each driver is from triggering a higher reading</div>',
+        unsafe_allow_html=True,
+    )
+    rows_html = [
+        '<tr style="border-bottom:1px solid #1f2630;color:#6b7280;font-size:10px;'
+        'letter-spacing:0.08em;text-transform:uppercase;">'
+        "<th style='text-align:left;padding:6px 8px;'>Indicator</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Current</th>"
+        "<th style='text-align:right;padding:6px 8px;'>→30% at</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Distance</th>"
+        "<th style='text-align:right;padding:6px 8px;'>→50% at</th>"
+        "<th style='text-align:right;padding:6px 8px;'>±1SD impact</th></tr>"
+    ]
+    for s in ranked:
+        t30 = f"{s['trigger_30']:.2f}" if s.get("trigger_30") is not None else "—"
+        d30 = f"{s['distance_30']:+.2f}" if s.get("distance_30") is not None else "—"
+        t50 = f"{s['trigger_50']:.2f}" if s.get("trigger_50") is not None else "—"
+        rows_html.append(
+            f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
+            f'<td style="padding:6px 8px;">{s["feature"]}<span style="color:#5a6470;"> · {s["category"]}</span></td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{s["current_value"]:.2f}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{t30}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;color:{PALETTE["accent"]};">{d30}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{t50}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{s["impact_pp"]:+.1f} pp</td></tr>'
+        )
+    st.markdown(
+        '<div class="panel"><div class="panel-body"><table style="width:100%;border-collapse:collapse;">'
+        + "".join(rows_html)
+        + "</table></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    nearest = ranked[0]
+    nearest_txt = (
+        f"<b>{nearest['feature']}</b> is closest to its 30% trigger — "
+        f"{abs(nearest['distance_30']):.2f} away from {nearest['trigger_30']:.2f} "
+        f"(currently {nearest['current_value']:.2f})."
+        if nearest.get("distance_30") is not None
+        else "No driver is currently within range of its 30% trigger."
+    )
+
+    # Adverse scenario + what-would-change-our-view.
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        adverse = report["adverse_scenario_probability"]
+        st.markdown('<div class="label-small">Adverse scenario</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+            f"If every BIC driver simultaneously deteriorated by one standard deviation in its "
+            f"risk-increasing direction, the BIC model would print <b>{adverse:.0f}%</b>. "
+            "This is a tail construction — it requires uncorrelated indicators to move together, "
+            f"which historically happens only in systemic stress. {nearest_txt}"
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown('<div class="label-small">What would change our view</div>', unsafe_allow_html=True)
+        items = [
+            "Term spread falls below −1.0% — historically associated with hard-landing risk.",
+            "Core CPI drops below 1.5% — demand destruction outpacing supply normalization.",
+            "Housing starts decline more than 15% YoY — mortgage-rate transmission accelerating.",
+            "Initial claims sustain above 300K (4-week avg) — early labor-demand deterioration.",
+            "Ensemble rises above 20% for two consecutive updates — model-convergence signal.",
+        ]
+        body = "".join(
+            f'<div style="font-size:12px;line-height:1.6;color:{PALETTE["text_primary"]};margin-bottom:6px;">'
+            f'<span style="color:{PALETTE["accent"]};">{i+1}.</span> {t}</div>'
+            for i, t in enumerate(items)
+        )
+        st.markdown(f'<div class="panel"><div class="panel-body">{body}</div></div>', unsafe_allow_html=True)
+
+    # Data currency notice.
+    lagged = report.get("lagged_series") or []
+    lagged_txt = ", ".join(lagged) if lagged else "None"
+    st.markdown(
+        f'<div class="panel" style="margin-top:16px;border-color:{PALETTE["panel_border"]};">'
+        f'<div class="panel-body" style="font-size:11px;color:{PALETTE["text_muted"]};line-height:1.6;">'
+        f"<b>Data currency.</b> Reflects FRED data through {report['data_through']}. "
+        f"Series with publication lags over 30 days: {lagged_txt}. "
+        "Probabilities refresh automatically on the next cached rebuild."
         "</div></div>",
         unsafe_allow_html=True,
     )
