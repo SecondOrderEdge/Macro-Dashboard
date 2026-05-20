@@ -59,9 +59,6 @@ SERIES_REGISTRY: dict[str, dict] = {
 
     # Real-time recession nowcast — Sahm Rule (no NBER look-ahead).
     "sahm": {"fred_id": "SAHMREALTIME", "freq": "M", "transform": "level"},
-
-    # Long-history vacancy proxy (Conference Board help-wanted; back-extends JOLTS).
-    "hwiuratio": {"fred_id": "HWIURATIO", "freq": "M", "transform": "level"},
 }
 
 
