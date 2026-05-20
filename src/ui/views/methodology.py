@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.data.series_registry import SERIES_REGISTRY
-from src.models.recession_probit import THRESHOLD_ELEVATED
+from src.models.recession_probit import THRESHOLD_ELEVATED, feature_label
 from src.ui.components import add_recession_shading, apply_template, reliability_diagram
 from src.ui.theme import PALETTE
 
@@ -346,7 +346,7 @@ def _recession_section(probit: dict | None) -> None:
     if probit and "error" not in probit:
         feats = probit.get("bic_selected_features", [])
         meta = probit.get("model_metadata", {})
-        feat_txt = ", ".join(feats) if feats else "—"
+        feat_txt = ", ".join(f"{feature_label(f)} (<code>{f}</code>)" for f in feats) if feats else "—"
         st.markdown(
             '<div class="label-small" style="margin-top:12px;">BIC-selected features · current fit</div>'
             f'<div class="panel"><div class="panel-body">'
