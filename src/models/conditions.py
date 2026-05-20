@@ -19,7 +19,7 @@ Series definitions:
   release. Composite of 18 financial market measures. Same zero-mean
   convention as NFCI.
 
-* ``CFNAI3MA`` (monthly) — Chicago Fed National Activity Index, 3-month
+* ``CFNAIMA3`` (monthly) — Chicago Fed National Activity Index, 3-month
   moving average. A coincident composite of 85 real-economy indicators.
   The canonical recession-signal threshold is < -0.7; the canonical
   overheating threshold is > +0.7.
@@ -47,11 +47,11 @@ def stlfsi(panel: pd.DataFrame) -> pd.Series:
 
 
 def cfnai_3ma(panel: pd.DataFrame) -> pd.Series:
-    return _series(panel, "CFNAI3MA")
+    return _series(panel, "CFNAIMA3")
 
 
 def wage_tracker(panel: pd.DataFrame) -> pd.Series:
-    return _series(panel, "FRBATLWGT12MMUMHWGO")
+    return _series(panel, "FRBATLWGT12MMAUMHWGO")
 
 
 def _series(panel: pd.DataFrame, fred_id: str) -> pd.Series:
@@ -84,7 +84,7 @@ def stress_band(value: float) -> tuple[str, str]:
 
 
 def cfnai_band(value: float) -> tuple[str, str]:
-    """Map CFNAI3MA value to (label, severity).
+    """Map CFNAIMA3 value to (label, severity).
 
     Canonical thresholds: > +0.7 overheating; -0.7 to +0.7 normal;
     -0.7 to -1.5 recession warning; < -1.5 deep recession.

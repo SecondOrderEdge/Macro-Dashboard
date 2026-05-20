@@ -71,12 +71,12 @@ SERIES_REGISTRY: dict[str, dict] = {
     "stlfsi":  {"fred_id": "STLFSI4", "freq": "W", "transform": "level"},
 
     # Chicago Fed National Activity Index — coincident, monthly, with a
-    # canonical recession-signal threshold of CFNAI3MA < -0.7.
-    "cfnai":     {"fred_id": "CFNAI",     "freq": "M", "transform": "level"},
-    "cfnai_3ma": {"fred_id": "CFNAI3MA",  "freq": "M", "transform": "level"},
+    # canonical recession-signal threshold of CFNAIMA3 < -0.7.
+    "cfnai":     {"fred_id": "CFNAI",    "freq": "M", "transform": "level"},
+    "cfnai_3ma": {"fred_id": "CFNAIMA3", "freq": "M", "transform": "level"},
 
     # Atlanta Fed Wage Growth Tracker — 12-month MA of median wage growth.
-    "wage_tracker": {"fred_id": "FRBATLWGT12MMUMHWGO", "freq": "M", "transform": "level"},
+    "wage_tracker": {"fred_id": "FRBATLWGT12MMAUMHWGO", "freq": "M", "transform": "level"},
 }
 
 
