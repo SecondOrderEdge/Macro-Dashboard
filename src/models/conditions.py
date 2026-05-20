@@ -51,7 +51,7 @@ def cfnai_3ma(panel: pd.DataFrame) -> pd.Series:
 
 
 def wage_tracker(panel: pd.DataFrame) -> pd.Series:
-    return _series(panel, "FRBATLWGT12MMAUMHWGO")
+    return _series(panel, "FRBATLWGT12MMAWMHWGO")
 
 
 def _series(panel: pd.DataFrame, fred_id: str) -> pd.Series:

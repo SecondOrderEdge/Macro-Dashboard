@@ -307,7 +307,7 @@ def _render_wage_tracker(panel: pd.DataFrame, nber: pd.Series) -> None:
     st.markdown(
         f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
         "Tracks the median YoY wage growth of workers who held a job in both reference months — "
-        "by construction immune to compositional shifts. Source: <code>FRBATLWGT12MMAUMHWGO</code> on FRED."
+        "by construction immune to compositional shifts. Source: <code>FRBATLWGT12MMAWMHWGO</code> on FRED."
         "</div></div>",
         unsafe_allow_html=True,
     )
