@@ -68,12 +68,34 @@ def fetch_series(series_id: str, start: str = "1959-01-01") -> pd.Series:
 def fetch_panel(series_ids: Iterable[str], start: str = "1959-01-01") -> pd.DataFrame:
     """Fetch many FRED series and align them into a single DataFrame.
 
-    Series with no observations raise rather than silently being dropped — we
-    want loud failures during development.
+    Individual series failures (missing/renamed/discontinued IDs) are
+    logged via Streamlit's warning channel and skipped rather than
+    aborting the whole panel fetch — otherwise one bad ID takes the
+    entire dashboard down. If every series fails the function raises.
     """
     frames = []
+    failed: list[tuple[str, str]] = []
     for sid in series_ids:
-        frames.append(fetch_series(sid, start))
+        try:
+            frames.append(fetch_series(sid, start))
+        except Exception as exc:  # noqa: BLE001 - we want any FRED-side failure
+            failed.append((sid, str(exc)))
+
+    if not frames:
+        msg = "All FRED series failed to load."
+        if failed:
+            msg += " First few errors: " + "; ".join(f"{sid}: {err}" for sid, err in failed[:3])
+        raise RuntimeError(msg)
+
+    if failed:
+        try:
+            import streamlit as st
+
+            warning = "Skipped " + ", ".join(sid for sid, _ in failed) + " (FRED returned an error)."
+            st.warning(warning, icon="⚠️")
+        except Exception:
+            pass
+
     df = pd.concat(frames, axis=1)
     df = df.sort_index()
     return df
