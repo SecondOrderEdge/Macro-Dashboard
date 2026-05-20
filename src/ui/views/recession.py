@@ -1,9 +1,9 @@
-"""Recession page — five-model academic probit ensemble.
+"""Recession page — four-model probit ensemble (plus a coincident benchmark).
 
 Three tabs surface the same analytics the weekly investment-committee email
-reports: The Reading (headline + history + drivers), Under the Hood (the five
-models, comparison, bootstrap CI, indicator percentiles), and Watchlist
-(trigger levels, adverse scenario, what-would-change-our-view).
+reports: The Reading (headline + history + drivers), Under the Hood (the four
+forward models + coincident benchmark, comparison, indicator percentiles),
+Watchlist (trigger levels, adverse scenario), and Scenario (what-if sliders).
 
 The report dict is produced by :mod:`src.models.recession_probit`.
 """
@@ -16,7 +16,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-from src.models.recession_probit import THRESHOLD_ELEVATED, THRESHOLD_WARNING, feature_label
+from src.models.recession_probit import (
+    THRESHOLD_ELEVATED,
+    THRESHOLD_WARNING,
+    feature_label,
+    scenario_probability,
+)
 from src.ui.components import (
     add_recession_shading,
     apply_template,
@@ -54,8 +59,8 @@ def render(report: dict | None, nber: pd.Series) -> None:
 
     selected = option_menu(
         menu_title=None,
-        options=["The Reading", "Under the Hood", "Watchlist"],
-        icons=["graph-up", "sliders", "bullseye"],
+        options=["The Reading", "Under the Hood", "Watchlist", "Scenario"],
+        icons=["graph-up", "sliders", "bullseye", "toggles"],
         orientation="horizontal",
         default_index=0,
         key="recession_tab",
@@ -66,8 +71,10 @@ def render(report: dict | None, nber: pd.Series) -> None:
         _render_reading(report, nber)
     elif selected == "Under the Hood":
         _render_under_hood(report)
-    else:
+    elif selected == "Watchlist":
         _render_watchlist(report)
+    else:
+        _render_scenario(report)
 
 
 # --------------------------------------------------------------- shared helpers
@@ -134,7 +141,7 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
     with left:
         st.markdown(
             metric_card(
-                label="12-month recession probability · 5-model ensemble",
+                label="12-month recession probability · 4-model ensemble",
                 value=f"{ens:.0f}",
                 unit="%",
                 risk_color_hex=color,
@@ -181,7 +188,7 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
             x=ens_hist.index, y=ens_hist.values, mode="lines",
             line=dict(color=PALETTE["accent"], width=1.6),
             fill="tozeroy", fillcolor=_fade(PALETTE["accent"], 0.12),
-            name="5-model ensemble",
+            name="4-model ensemble",
             hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>Ensemble</extra>",
         )
     )
@@ -216,7 +223,7 @@ def _reading_text(report: dict) -> str:
     p_lo, p_hi = min(probs.values()), max(probs.values())
     consensus = report["consensus"].lower()
     parts = [
-        f"Our five-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
+        f"Our four-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
         f"recession within 12 months — consistent with <b>{_consistent_with(ens)}</b>."
     ]
     lo, hi = report.get("ci_lower"), report.get("ci_upper")
@@ -265,28 +272,34 @@ def _attribution_block(report: dict) -> str:
 
 def _render_under_hood(report: dict) -> None:
     probs = report["model_probabilities"]
+    benchmarks = report.get("benchmark_probabilities") or {}
     ens = report["ensemble_probability"]
 
-    # Model cards: ensemble first, then the five specifications.
-    order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin", "Chauvet-Piger"]
-    cards = [("5-model ensemble", ens, True)] + [
-        (name, probs[name], False) for name in order if name in probs
-    ]
+    # Cards: the ensemble, then the four forward (12-month-ahead) models, then
+    # any coincident benchmarks shown separately (not part of the average).
+    order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin"]
+    cards = [("4-model ensemble", ens, "ensemble")] + [
+        (name, probs[name], "forward") for name in order if name in probs
+    ] + [(name, val, "benchmark") for name, val in benchmarks.items()]
     cols = st.columns(len(cards))
-    for col, (name, val, is_ens) in zip(cols, cards):
+    for col, (name, val, kind) in zip(cols, cards):
         with col:
             st.markdown(
                 metric_card(
                     label=name,
                     value=f"{val:.0f}",
                     unit="%",
-                    risk_color_hex=PALETTE["accent"] if is_ens else _prob_color(val),
-                    subline="ensemble" if is_ens else "12m probability",
+                    risk_color_hex=PALETTE["accent"] if kind == "ensemble" else _prob_color(val),
+                    subline={
+                        "ensemble": "mean of 4 forward models",
+                        "forward": "12m-ahead probability",
+                        "benchmark": "coincident · not in ensemble",
+                    }[kind],
                 ),
                 unsafe_allow_html=True,
             )
 
-    # Model comparison bar.
+    # Model comparison bar (forward models only; the ensemble is the dashed line).
     st.markdown(
         '<div class="label-small" style="margin-top:16px;">Model comparison · do the specifications agree?</div>',
         unsafe_allow_html=True,
@@ -304,16 +317,26 @@ def _render_under_hood(report: dict) -> None:
     )
     fig.add_vline(x=ens, line=dict(color=PALETTE["accent"], width=1, dash="dash"))
     fig.add_vline(x=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
-    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(s.max() * 1.25, 40)])
+    max_x = max(s.max(), *(benchmarks.values() if benchmarks else [0]))
+    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(max_x * 1.25, 40)])
     apply_template(fig, height=300, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
+    bench_txt = ""
+    if "Chauvet-Piger" in benchmarks:
+        bench_txt = (
+            f" <b>Chauvet-Piger</b> ({benchmarks['Chauvet-Piger']:.0f}%) is shown separately as a "
+            "<i>coincident</i> benchmark — FRED's smoothed Markov-switching nowcast "
+            "(<code>RECPROUSM156N</code>) of whether we're in recession <i>now</i>, a different "
+            "horizon — so it is excluded from the ensemble average."
+        )
     st.markdown(
         f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
-        "All five probabilities are computed live from FRED — none are hand-entered. "
+        "All probabilities are computed live from FRED — none are hand-entered. "
         "<b>NY Fed</b> and <b>Estrella-Mishkin</b> use the 10y-3m term spread; <b>Wright</b> adds the fed funds rate; "
-        "<b>BIC-selected</b> is a sign-constrained multivariate probit; <b>Chauvet-Piger</b> is FRED's smoothed "
-        "Markov-switching series (<code>RECPROUSM156N</code>). The ensemble is their equal-weighted average."
+        "<b>BIC-selected</b> is a sign-constrained multivariate probit. The ensemble is the equal-weighted "
+        "average of these four 12-month-ahead models."
+        f"{bench_txt}"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -456,6 +479,107 @@ def _render_watchlist(report: dict) -> None:
         f"<b>Data currency.</b> Reflects FRED data through {report['data_through']}. "
         f"Series with publication lags over 30 days: {lagged_txt}. "
         "Probabilities refresh automatically on the next cached rebuild."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ----------------------------------------------------------------- Scenario
+
+
+def _render_scenario(report: dict) -> None:
+    sens = report.get("sensitivity") or []
+    coefs = report.get("bic_coefficients") or {}
+    if not sens or not coefs:
+        st.info("Scenario tool unavailable — the BIC model has no tunable drivers.")
+        return
+
+    baseline = report["bic_probability"]
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        "<p>Move the drivers and watch the probability respond. This perturbs the "
+        "<b>BIC-selected multivariate model</b> — the one specification of the five with "
+        "multiple tunable inputs — recomputing Φ(β·x) directly from its fitted coefficients "
+        "(no refit). Every non-moved driver is held at its current value, so each reading is a "
+        "<i>ceteris paribus</i> what-if, not a forecast of joint moves.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Order drivers by influence (|coef · 1SD|) so the most impactful sit on top.
+    rows = sorted(sens, key=lambda s: abs(s.get("coef", 0.0) * s.get("std_dev", 0.0)), reverse=True)
+
+    left, right = st.columns([3, 2])
+    overrides: dict[str, float] = {}
+    with left:
+        st.markdown('<div class="label-small">Drivers</div>', unsafe_allow_html=True)
+        for s in rows:
+            feat = s["feature"]
+            lo, hi = float(s["hist_min"]), float(s["hist_max"])
+            cur = float(s["current_value"])
+            if not all(np.isfinite(v) for v in (lo, hi, cur)):
+                continue
+            # Always include the current reading (it can be a fresh extreme beyond
+            # the training-sample min/max) so the slider default stays in range.
+            lo, hi = min(lo, cur), max(hi, cur)
+            span = (hi - lo) or abs(cur) or 1.0
+            lo_s, hi_s = lo - 0.05 * span, hi + 0.05 * span
+            step = max(span / 200.0, 1e-4)
+            val = st.slider(
+                f"{feature_label(feat)}",
+                min_value=float(round(lo_s, 4)),
+                max_value=float(round(hi_s, 4)),
+                value=float(cur),
+                step=float(step),
+                key=f"scenario_{feat}",
+                help=f"{feat} · current {cur:g} · historical range [{lo:g}, {hi:g}]",
+            )
+            overrides[feat] = val
+
+    scenario_prob = scenario_probability(report, overrides)
+    delta = scenario_prob - baseline
+    color = _prob_color(scenario_prob)
+
+    with right:
+        st.markdown('<div class="label-small">Scenario probability</div>', unsafe_allow_html=True)
+        st.markdown(
+            metric_card(
+                label="BIC model · this scenario",
+                value=f"{scenario_prob:.0f}",
+                unit="%",
+                risk_color_hex=color,
+                subline=f"baseline {baseline:.0f}% · {delta:+.0f} pp vs current",
+            ),
+            unsafe_allow_html=True,
+        )
+        # How far the scenario sits from the warning / elevated thresholds.
+        st.markdown(
+            f'<div class="panel" style="margin-top:8px;"><div class="panel-body" '
+            f'style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
+            f"Warning threshold {THRESHOLD_WARNING}% · elevated {THRESHOLD_ELEVATED}%. "
+            + (
+                f"This scenario is <b>{scenario_prob - THRESHOLD_WARNING:+.0f} pp</b> relative to the "
+                "warning line."
+                if np.isfinite(scenario_prob) else ""
+            )
+            + " Reset by dragging sliders back, or reload the page."
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Reset to current", key="scenario_reset"):
+            for s in rows:
+                st.session_state.pop(f"scenario_{s['feature']}", None)
+            st.rerun()
+
+    st.markdown(
+        f'<div class="panel" style="margin-top:12px;border-color:{PALETTE["panel_border"]};">'
+        f'<div class="panel-body" style="font-size:11px;color:{PALETTE["text_muted"]};line-height:1.6;">'
+        "<b>Reading this honestly.</b> This is the BIC model alone, not the four-model ensemble "
+        f"headline ({report['ensemble_probability']:.0f}%). It assumes each driver moves "
+        "independently — real downturns move them together, so a realistic joint move would "
+        "typically push the probability higher than any single-slider change implies. Slider "
+        "ranges span each driver's historical min–max over the training sample."
         "</div></div>",
         unsafe_allow_html=True,
     )

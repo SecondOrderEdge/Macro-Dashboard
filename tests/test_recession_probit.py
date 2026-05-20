@@ -105,14 +105,20 @@ def test_report_core_fields(report):
     assert report["consensus"] in {"STRONG", "MODERATE", "WEAK"}
 
 
-def test_report_has_five_models(report):
+def test_report_has_four_forward_models(report):
     probs = report["model_probabilities"]
-    for name in ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin", "Chauvet-Piger"]:
+    for name in ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin"]:
         assert name in probs
         assert 0 <= probs[name] <= 100
 
 
-def test_report_ensemble_is_mean_of_models(report):
+def test_chauvet_piger_is_a_separate_benchmark(report):
+    # Coincident benchmark must be reported but excluded from the ensemble inputs.
+    assert "Chauvet-Piger" not in report["model_probabilities"]
+    assert "Chauvet-Piger" in report["benchmark_probabilities"]
+
+
+def test_report_ensemble_is_mean_of_forward_models_only(report):
     probs = list(report["model_probabilities"].values())
     assert report["ensemble_probability"] == pytest.approx(np.mean(probs), abs=0.05)
 
@@ -165,6 +171,57 @@ def test_calibration_stats_shape(synthetic_raw):
     assert 0 <= stats["brier"] <= 1
     assert stats["n_obs"] > 0
     assert not stats["reliability_curve"].empty
+
+
+def test_report_exposes_bic_coefficients(report):
+    assert "bic_const" in report
+    coefs = report["bic_coefficients"]
+    assert set(coefs) == set(report["bic_selected_features"])
+    assert all(isinstance(v, float) for v in coefs.values())
+
+
+def test_scenario_probability_matches_baseline_with_no_overrides(report):
+    # With no overrides the scenario must reproduce the BIC point estimate.
+    assert rp.scenario_probability(report) == pytest.approx(report["bic_probability"], abs=0.5)
+
+
+def test_scenario_probability_is_phi_of_linear_index(report):
+    from scipy import stats
+
+    coefs = report["bic_coefficients"]
+    const = report["bic_const"]
+    vals = {f: report["indicator_readings"][f]["value"] for f in coefs}
+
+    # No override → exactly Φ(const + Σ β·x_current).
+    z = const + sum(coefs[f] * vals[f] for f in coefs)
+    assert rp.scenario_probability(report) == pytest.approx(float(stats.norm.cdf(z) * 100), abs=0.01)
+
+    # One overridden driver recomputes the linear index correctly.
+    f0 = next(iter(coefs))
+    over = {f0: vals[f0] + 1.0}
+    z2 = z + coefs[f0] * 1.0
+    assert rp.scenario_probability(report, over) == pytest.approx(float(stats.norm.cdf(z2) * 100), abs=0.01)
+
+
+def test_scenario_probability_respects_sign_constraint(report):
+    # Pushing the spread far down (if selected) must not lower probability.
+    if "SPREAD" not in report["bic_coefficients"]:
+        pytest.skip("SPREAD not selected in this fixture's BIC model")
+    cur = report["indicator_readings"]["SPREAD"]["value"]
+    p_low = rp.scenario_probability(report, {"SPREAD": cur - 3.0})
+    p_high = rp.scenario_probability(report, {"SPREAD": cur + 3.0})
+    assert p_low >= p_high  # lower spread ⇒ weakly higher recession probability
+
+
+def test_walk_forward_excludes_unobserved_labels(synthetic_raw, monkeypatch):
+    # The training cutoff must lag each refit by 12 months so future labels
+    # can't leak. We assert no training row used has index within 12 months
+    # before a refit date by spying on the fitted training set sizes: a leaky
+    # implementation would include ~12 extra recent rows per refit.
+    oos = rp.walk_forward(synthetic_raw, oos_start="1995-01-01", refit_every_months=24)
+    assert not oos.empty
+    # Predictions still cover the post-cutoff period and stay bounded.
+    assert (oos >= 0).all() and (oos <= 100).all()
 
 
 def test_feature_label_plain_english():

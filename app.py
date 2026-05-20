@@ -48,7 +48,7 @@ def _load_nber() -> pd.Series:
 
 @st.cache_resource(show_spinner=False)
 def _build_models(cache_version: str) -> dict:
-    """Build the LAME, yield-curve, and five-model probit recession engines.
+    """Build the LAME, yield-curve, and four-model probit recession engine.
 
     ``cache_version`` participates in Streamlit's resource cache key — bump
     it whenever model or class code changes, otherwise the *old* instance
@@ -65,7 +65,7 @@ def _build_models(cache_version: str) -> dict:
 
     yc = YieldCurve(panel)
 
-    # Five-model academic probit ensemble — the app-wide recession engine. It
+    # Four-model academic probit ensemble — the app-wide recession engine. It
     # carries its own in-sample + walk-forward calibration. Isolated in a
     # try/except so a probit-side failure can't take down the whole app.
     try:
@@ -86,7 +86,7 @@ def _build_models(cache_version: str) -> dict:
 
 
 def _probit_ensemble_now(models: dict) -> float:
-    """Headline 12-month recession probability from the five-model probit ensemble."""
+    """Headline 12-month recession probability from the four-model probit ensemble."""
     probit = models.get("probit") or {}
     if not probit or "error" in probit:
         return float("nan")
@@ -205,7 +205,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v10-probit-appwide")
+            models = _build_models("v13-window-target")
     except Exception as exc:
         _header(None)
         _nav()
