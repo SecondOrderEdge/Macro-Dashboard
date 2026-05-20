@@ -16,7 +16,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-from src.models.recession_probit import THRESHOLD_ELEVATED, THRESHOLD_WARNING, feature_label
+from src.models.recession_probit import (
+    THRESHOLD_ELEVATED,
+    THRESHOLD_WARNING,
+    feature_label,
+    scenario_probability,
+)
 from src.ui.components import (
     add_recession_shading,
     apply_template,
@@ -54,8 +59,8 @@ def render(report: dict | None, nber: pd.Series) -> None:
 
     selected = option_menu(
         menu_title=None,
-        options=["The Reading", "Under the Hood", "Watchlist"],
-        icons=["graph-up", "sliders", "bullseye"],
+        options=["The Reading", "Under the Hood", "Watchlist", "Scenario"],
+        icons=["graph-up", "sliders", "bullseye", "toggles"],
         orientation="horizontal",
         default_index=0,
         key="recession_tab",
@@ -66,8 +71,10 @@ def render(report: dict | None, nber: pd.Series) -> None:
         _render_reading(report, nber)
     elif selected == "Under the Hood":
         _render_under_hood(report)
-    else:
+    elif selected == "Watchlist":
         _render_watchlist(report)
+    else:
+        _render_scenario(report)
 
 
 # --------------------------------------------------------------- shared helpers
@@ -456,6 +463,107 @@ def _render_watchlist(report: dict) -> None:
         f"<b>Data currency.</b> Reflects FRED data through {report['data_through']}. "
         f"Series with publication lags over 30 days: {lagged_txt}. "
         "Probabilities refresh automatically on the next cached rebuild."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ----------------------------------------------------------------- Scenario
+
+
+def _render_scenario(report: dict) -> None:
+    sens = report.get("sensitivity") or []
+    coefs = report.get("bic_coefficients") or {}
+    if not sens or not coefs:
+        st.info("Scenario tool unavailable — the BIC model has no tunable drivers.")
+        return
+
+    baseline = report["bic_probability"]
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        "<p>Move the drivers and watch the probability respond. This perturbs the "
+        "<b>BIC-selected multivariate model</b> — the one specification of the five with "
+        "multiple tunable inputs — recomputing Φ(β·x) directly from its fitted coefficients "
+        "(no refit). Every non-moved driver is held at its current value, so each reading is a "
+        "<i>ceteris paribus</i> what-if, not a forecast of joint moves.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Order drivers by influence (|coef · 1SD|) so the most impactful sit on top.
+    rows = sorted(sens, key=lambda s: abs(s.get("coef", 0.0) * s.get("std_dev", 0.0)), reverse=True)
+
+    left, right = st.columns([3, 2])
+    overrides: dict[str, float] = {}
+    with left:
+        st.markdown('<div class="label-small">Drivers</div>', unsafe_allow_html=True)
+        for s in rows:
+            feat = s["feature"]
+            lo, hi = float(s["hist_min"]), float(s["hist_max"])
+            cur = float(s["current_value"])
+            if not all(np.isfinite(v) for v in (lo, hi, cur)):
+                continue
+            # Always include the current reading (it can be a fresh extreme beyond
+            # the training-sample min/max) so the slider default stays in range.
+            lo, hi = min(lo, cur), max(hi, cur)
+            span = (hi - lo) or abs(cur) or 1.0
+            lo_s, hi_s = lo - 0.05 * span, hi + 0.05 * span
+            step = max(span / 200.0, 1e-4)
+            val = st.slider(
+                f"{feature_label(feat)}",
+                min_value=float(round(lo_s, 4)),
+                max_value=float(round(hi_s, 4)),
+                value=float(cur),
+                step=float(step),
+                key=f"scenario_{feat}",
+                help=f"{feat} · current {cur:g} · historical range [{lo:g}, {hi:g}]",
+            )
+            overrides[feat] = val
+
+    scenario_prob = scenario_probability(report, overrides)
+    delta = scenario_prob - baseline
+    color = _prob_color(scenario_prob)
+
+    with right:
+        st.markdown('<div class="label-small">Scenario probability</div>', unsafe_allow_html=True)
+        st.markdown(
+            metric_card(
+                label="BIC model · this scenario",
+                value=f"{scenario_prob:.0f}",
+                unit="%",
+                risk_color_hex=color,
+                subline=f"baseline {baseline:.0f}% · {delta:+.0f} pp vs current",
+            ),
+            unsafe_allow_html=True,
+        )
+        # How far the scenario sits from the warning / elevated thresholds.
+        st.markdown(
+            f'<div class="panel" style="margin-top:8px;"><div class="panel-body" '
+            f'style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
+            f"Warning threshold {THRESHOLD_WARNING}% · elevated {THRESHOLD_ELEVATED}%. "
+            + (
+                f"This scenario is <b>{scenario_prob - THRESHOLD_WARNING:+.0f} pp</b> relative to the "
+                "warning line."
+                if np.isfinite(scenario_prob) else ""
+            )
+            + " Reset by dragging sliders back, or reload the page."
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Reset to current", key="scenario_reset"):
+            for s in rows:
+                st.session_state.pop(f"scenario_{s['feature']}", None)
+            st.rerun()
+
+    st.markdown(
+        f'<div class="panel" style="margin-top:12px;border-color:{PALETTE["panel_border"]};">'
+        f'<div class="panel-body" style="font-size:11px;color:{PALETTE["text_muted"]};line-height:1.6;">'
+        "<b>Reading this honestly.</b> This is the BIC model alone, not the five-model ensemble "
+        f"headline ({report['ensemble_probability']:.0f}%). It assumes each driver moves "
+        "independently — real downturns move them together, so a realistic joint move would "
+        "typically push the probability higher than any single-slider change implies. Slider "
+        "ranges span each driver's historical min–max over the training sample."
         "</div></div>",
         unsafe_allow_html=True,
     )

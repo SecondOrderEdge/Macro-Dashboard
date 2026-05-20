@@ -506,14 +506,17 @@ def _walk_forward_section(probit: dict | None) -> None:
         f'color:{PALETTE["text_primary"]};">'
         "<p>In-sample Brier/AUC overstate what a real-time forecaster would have achieved. "
         "The walk-forward backtest fixes this: at each refit date the re-estimated models "
-        "(NY Fed, Wright, BIC) are fit using only data strictly before that date and used to "
-        "predict forward; Estrella-Mishkin (closed form) and Chauvet-Piger (a published "
-        "series) are inherently out-of-sample. No future data enters any prediction.</p>"
+        "(NY Fed, Wright, BIC) are fit using only observations whose 12-month-ahead outcome "
+        "was already known by that date — i.e. month <code>t</code> enters training only once "
+        "<code>t+12 ≤ refit date</code>, so a label that wouldn't yet have been observed can't "
+        "leak in. Estrella-Mishkin (closed form) and Chauvet-Piger (a published series) are "
+        "inherently out-of-sample.</p>"
         "<p><b>Protocol.</b> Annual refits from <code>1985-01-01</code>; the most recent fit "
         "scores every month until the next refit. The BIC <i>feature set</i> is selected once "
         "on the full sample (coefficients are re-estimated out-of-sample, selection is not) — "
         "reselecting features at every refit would multiply runtime without changing the "
-        "headline conclusion.</p>"
+        "headline conclusion. The OOS series therefore starts once enough labelled history has "
+        "accumulated under the 12-month cutoff.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -590,47 +593,54 @@ def _limitations() -> None:
     points = [
         (
             "In-sample headline · mitigated.",
-            "The default reading is fit on the full sample. A full walk-forward backtest "
-            "(section 10 above) is computed at app startup and surfaces true out-of-sample "
+            "The default reading is fit on the full sample. The walk-forward backtest "
+            "(section 10) is computed at app startup and surfaces true out-of-sample "
             "Brier / AUC / reliability — use that for honest predictive performance, not "
             "the in-sample headline.",
         ),
         (
-            "Regime shifts · partly mitigated.",
-            "The 2020 pandemic is excluded from training by default; toggle the option at "
-            "the top of this page to see how coefficients shift when it's included. "
-            "We still use static sign priors and equal-weight aggregation — a fully "
-            "regime-switching specification (e.g. Markov-switching probit) is out of scope.",
+            "Forecast horizon · mixed.",
+            "Four models target a point-in-time outcome (recession exactly 12 months ahead). "
+            "<b>Chauvet–Piger</b> is a <i>coincident</i> smoothed nowcast — it answers "
+            "\"are we in recession now?\", not \"within 12 months?\" — and is included as a "
+            "benchmark. Averaging it with the four forward models blends horizons, so read the "
+            "ensemble as a blended risk gauge rather than a single-horizon probability.",
         ),
         (
-            "Series availability · partial.",
-            "JOLTS begin in 2000 and the BofA high-yield OAS begins in 1996. The credit "
-            "submodel relies on BAA10Y and DRTSCILM pre-1996 and on all three series "
-            "after that. The walk-forward backtest's earliest credit predictions are "
-            "therefore based on fewer features than recent ones.",
+            "Target definition · point-in-time.",
+            "The dependent variable is <code>y_t = 1</code> if the economy is in NBER recession "
+            "at month <code>t+12</code> (the NY Fed convention). The alternative \"any recession "
+            "within the next 12 months\" (window) definition would print somewhat higher, more "
+            "persistent probabilities; the Boston Fed has documented material dispersion between "
+            "the two.",
         ),
         (
-            "Look-ahead in NBER dating · partly mitigated.",
-            "Section 9 reports walk-forward predictions using the NBER record as known "
-            "today; we don't store NBER vintages. As a real-time check that does not "
-            "depend on NBER, the Labor page also shows the Sahm Rule (FRED "
-            "<code>SAHMREALTIME</code>) — a recession indicator that uses only real-time "
-            "unemployment and is not revised after release.",
+            "Feature selection · in-sample.",
+            "BIC forward selection runs once on the full sample; the walk-forward backtest "
+            "re-estimates coefficients out-of-sample but holds that feature set fixed. Features "
+            "covering less than 80% of the target window (e.g. JOLTS from 2000) are dropped so "
+            "short-history series don't shrink the estimation sample.",
+        ),
+        (
+            "Bootstrap CI · approximate.",
+            "The 90% interval resamples observations i.i.d.; because recession data is serially "
+            "correlated, an i.i.d. bootstrap understates true uncertainty somewhat. Read the "
+            "interval as indicative, not exact — a block bootstrap would widen it.",
+        ),
+        (
+            "NBER dating · revised, not real-time.",
+            "Recession shading and the training target use FRED <code>USREC</code> as known "
+            "today; we don't store NBER vintages, and the NBER dates cycles with a long lag. As "
+            "a real-time cross-check that doesn't depend on NBER, the Labor page also shows the "
+            "Sahm Rule (FRED <code>SAHMREALTIME</code>), which uses only real-time unemployment "
+            "and is not revised after release.",
         ),
         (
             "Model comparison · fully live.",
-            "The Recession page's five-model comparison (NY Fed, Wright, BIC-selected, "
-            "Estrella–Mishkin, Chauvet–Piger) is computed live from FRED on every rebuild — "
-            "no hand-entered street estimates. The Chauvet–Piger reading is FRED's smoothed "
+            "The five-model comparison is computed live from FRED on every rebuild — no "
+            "hand-entered street estimates. The Chauvet–Piger reading is FRED's smoothed "
             "Markov-switching series (<code>RECPROUSM156N</code>); the others are probit "
             "specifications re-estimated on the FRED panel.",
-        ),
-        (
-            "Composite weights · interactive.",
-            "The default 50/25/25 blend is judgmental. The <i>Dashboard</i> page now has "
-            "a weight-sensitivity panel so any reader can re-weight the composite on the "
-            "fly. The interactive panel shows how much each lens contributes under your "
-            "chosen weighting; the default is documented above for reference.",
         ),
     ]
     body = "".join(

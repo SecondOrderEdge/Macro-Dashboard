@@ -307,6 +307,20 @@ def _prob(params: np.ndarray, x: np.ndarray) -> float:
     return float(_stats.norm.cdf(xc @ params) * 100.0)
 
 
+def _latest_values(data: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, pd.Timestamp] | tuple[None, None]:
+    """Most recent row in which *every* feature in ``feats`` is observed.
+
+    Using the per-model latest complete row (rather than a panel-wide dropna)
+    keeps each model's reading as current as its own inputs allow — a globally
+    aligned dropna would stale the headline whenever any one peripheral series
+    lags.
+    """
+    sub = data[feats].dropna()
+    if sub.empty:
+        return None, None
+    return sub.iloc[-1].astype(float).values, sub.index[-1]
+
+
 # ------------------------------------------------------------------- main report
 
 
@@ -379,10 +393,16 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     models["BIC-selected"] = {"res": res_bic, "features": bic_selected}
 
     # --- point-in-time probabilities ------------------------------------------
-    latest_vals = predict_df[bic_selected].iloc[-1].astype(float).values
+    # Each model is scored on the latest row where ITS features are all present,
+    # so a lagging peripheral series can't stale the whole panel.
+    latest_vals, _ = _latest_values(data, bic_selected)
+    if latest_vals is None:
+        raise RuntimeError("No complete recent observation for the BIC features.")
     model_probs: dict[str, float] = {}
     for name, m in models.items():
-        x = predict_df[m["features"]].iloc[-1].astype(float).values
+        x, _ = _latest_values(data, m["features"])
+        if x is None:
+            continue
         model_probs[name] = _prob(m["res"].params.values, x)
 
     if "SPREAD" in data.columns:
@@ -445,7 +465,8 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     ensemble_history, bic_history = _history(predict_df, data, models, res_bic, bic_selected)
 
     # --- 24-month trend attribution -------------------------------------------
-    trend_attribution = _trend_attribution(predict_df, res_bic, bic_selected, latest_vals, bic_prob)
+    bic_panel = data[bic_selected].dropna()
+    trend_attribution = _trend_attribution(bic_panel, res_bic, bic_selected, latest_vals, bic_prob)
 
     # --- consensus / signal ---------------------------------------------------
     pv = list(model_probs.values())
@@ -480,6 +501,8 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         "prob_range": round(prob_range, 2),
         "model_probabilities": {k: round(v, 2) for k, v in model_probs.items()},
         "bic_selected_features": bic_selected,
+        "bic_const": float(res_bic.params.iloc[0]),
+        "bic_coefficients": {feat: float(res_bic.params.iloc[j + 1]) for j, feat in enumerate(bic_selected)},
         "indicator_readings": indicator_readings,
         "sensitivity": sensitivity,
         "adverse_scenario_probability": round(adverse_prob, 2),
@@ -499,6 +522,27 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         "indicator_series": indicator_series,
         "feat_to_cat": feat_to_cat,
     }
+
+
+def scenario_probability(report: dict, overrides: dict[str, float] | None = None) -> float:
+    """BIC-model recession probability (%) under user-set indicator values.
+
+    Recomputes Φ(const + Σ βⱼ xⱼ) for the BIC-selected multivariate model,
+    starting from the current reading and applying any ``overrides`` (feature →
+    value). Holds every non-overridden feature at its current value — i.e. a
+    pure *ceteris paribus* perturbation, which is what the watchlist triggers
+    also assume. Cheap (no refit), so it's safe to call on every slider move.
+    """
+    if _stats is None:
+        raise RuntimeError("scipy is required for scenario_probability.")
+    coefs = report.get("bic_coefficients") or {}
+    const = report.get("bic_const", 0.0)
+    readings = report.get("indicator_readings") or {}
+    values = {f: float(readings.get(f, {}).get("value", 0.0)) for f in coefs}
+    if overrides:
+        values.update({f: float(v) for f, v in overrides.items() if f in coefs})
+    z = const + sum(coefs[f] * values[f] for f in coefs)
+    return float(_stats.norm.cdf(z) * 100.0)
 
 
 def _watchlist(model_df, bic_selected, latest_vals, res_bic, feat_to_cat) -> list[dict]:
@@ -542,6 +586,9 @@ def _watchlist(model_df, bic_selected, latest_vals, res_bic, feat_to_cat) -> lis
             "category": feat_to_cat.get(feat, ""),
             "current_value": round(current, 2),
             "std_dev": round(sd, 4),
+            "coef": float(coef),
+            "hist_min": round(float(model_df[feat].min()), 2),
+            "hist_max": round(float(model_df[feat].max()), 2),
             "prob_minus_1sd": round(prob_down, 2),
             "prob_plus_1sd": round(prob_up, 2),
             "impact_pp": round(prob_up - prob_down, 2),
@@ -625,10 +672,11 @@ def walk_forward(
     """True out-of-sample ensemble probability (%), refit on expanding windows.
 
     At each refit date the re-estimated models (NY Fed, Wright, BIC) are fit
-    using only data strictly before that date and used to predict every month
-    until the next refit. Estrella-Mishkin (closed form) and Chauvet-Piger
-    (a published series) are inherently out-of-sample. No future data enters
-    any prediction.
+    using only observations whose 12-month-ahead label was already known by that
+    date (t <= refit_ts - 12 months), then used to predict every month until the
+    next refit. Estrella-Mishkin (closed form) and Chauvet-Piger (a published
+    series) are inherently out-of-sample. No future data — features or labels —
+    enters any prediction.
 
     The BIC *feature set* is selected once on the full sample (parameters are
     re-estimated out-of-sample, selection is not) — the same in-sample-selection
@@ -661,7 +709,11 @@ def walk_forward(
     monthly: dict[pd.Timestamp, float] = {}
     for i, refit_ts in enumerate(refit_dates):
         next_ts = refit_dates[i + 1] if i + 1 < len(refit_dates) else end_ts + pd.DateOffset(months=1)
-        train = model_df.loc[model_df.index < refit_ts]
+        # The label for observation t (recession at t+12) is not observable until
+        # t+12. To avoid look-ahead, train only on rows whose label was known by
+        # the refit date: t <= refit_ts - 12 months.
+        label_cutoff = refit_ts - pd.DateOffset(months=12)
+        train = model_df.loc[model_df.index <= label_cutoff]
         if len(train) < MIN_WINDOW:
             continue
         y_train = train["TARGET"].astype(float)
