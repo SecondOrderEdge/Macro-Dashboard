@@ -50,7 +50,7 @@ MIN_WINDOW = 120
 MAX_FEATURES_BIC = 9
 THRESHOLD_WARNING = 30
 THRESHOLD_ELEVATED = 50
-TARGET_DEFINITION = "point"  # "point" = recession at t+12; "window" = any in t+1..t+12
+TARGET_DEFINITION = "window"  # "window" = any recession in t+1..t+12; "point" = recession at t+12
 BOOTSTRAP_ITERS = 300        # email job uses 500-1000; trimmed for dashboard latency
 
 # FRED universe: 35 candidate features across eight macro categories. ``freq``
@@ -331,7 +331,7 @@ def _latest_values(data: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, pd
 def _prepare(raw: pd.DataFrame) -> dict:
     """Engineer features, filter coverage, and run full-sample BIC selection.
 
-    Shared by :func:`build_report` (point-in-time) and :func:`walk_forward`
+    Shared by :func:`build_report` (current estimate) and :func:`walk_forward`
     (out-of-sample) so both see an identical feature universe and selection.
     """
     data, feature_cols, feat_to_cat = engineer_features(raw)
@@ -396,7 +396,7 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     res_bic = _fit_probit(y, model_df[bic_selected], maxiter=500)
     models["BIC-selected"] = {"res": res_bic, "features": bic_selected}
 
-    # --- point-in-time probabilities ------------------------------------------
+    # --- current probabilities ------------------------------------------------
     # Each model is scored on the latest row where ITS features are all present,
     # so a lagging peripheral series can't stale the whole panel.
     latest_vals, _ = _latest_values(data, bic_selected)
@@ -671,7 +671,7 @@ def _trend_attribution(predict_df, res_bic, bic_selected, latest_vals, bic_prob)
 
 
 def target_series(raw: pd.DataFrame) -> pd.Series:
-    """The point-in-time training target (recession at t+12), as a 0/1 series."""
+    """The training target (recession within t+1 … t+12 by default), as a 0/1 series."""
     data, _, _ = engineer_features(raw)
     return data["TARGET"].dropna().astype(float)
 

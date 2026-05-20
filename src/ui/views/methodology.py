@@ -314,7 +314,7 @@ def _recession_section(probit: dict | None) -> None:
         "spot. A fifth series, Chauvet–Piger, is reported as a coincident benchmark but "
         "excluded from the average (see below).</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
-        "y_t = 1 if NBER recession at month t+12   (point-in-time target)\n"
+        "y_t = 1 if an NBER recession occurs in any month t+1 … t+12   (window target)\n"
         "P(y_t = 1 | x_t) = Φ(β_0 + β'x_t)"
         "</pre>"
         "<p>where Φ is the standard normal CDF. The probit maps a linear combination of "
@@ -583,11 +583,14 @@ def _nber_section() -> None:
         "<p><b>Lag.</b> The NBER announces peaks roughly a year after the fact and troughs "
         "roughly 15 months after the fact. The dating is not a real-time signal; it is the "
         "ground truth against which forward-looking models like ours are scored.</p>"
-        "<p><b>Forward target.</b> The probit dependent variable is the point-in-time target</p>"
+        "<p><b>Forward target.</b> The probit dependent variable is the within-12-months "
+        "(window) target</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
-        "y_t = 1 if USREC = 1 at month t+12, else 0"
+        "y_t = 1 if USREC = 1 in any month from t+1 to t+12, else 0"
         "</pre>"
-        "<p>the same construction used by the NY Fed yield-curve model.</p>"
+        "<p>i.e. \"does a recession occur at some point in the next year?\" — matching how the "
+        "headline probability is read. The point-in-time variant (recession exactly at t+12) "
+        "prints lower, spikier numbers and can miss short recessions.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -607,20 +610,21 @@ def _limitations() -> None:
             "the in-sample headline.",
         ),
         (
-            "Forecast horizon · mixed.",
-            "Four models target a point-in-time outcome (recession exactly 12 months ahead). "
+            "Coincident benchmark · separate.",
             "<b>Chauvet–Piger</b> is a <i>coincident</i> smoothed nowcast — it answers "
-            "\"are we in recession now?\", not \"within 12 months?\" — and is included as a "
-            "benchmark. Averaging it with the four forward models blends horizons, so read the "
-            "ensemble as a blended risk gauge rather than a single-horizon probability.",
+            "\"are we in recession now?\", not \"within 12 months?\" — so it is reported beside "
+            "the ensemble as a benchmark and excluded from the average, keeping the headline a "
+            "single-horizon (12-month) number.",
         ),
         (
-            "Target definition · point-in-time.",
-            "The dependent variable is <code>y_t = 1</code> if the economy is in NBER recession "
-            "at month <code>t+12</code> (the NY Fed convention). The alternative \"any recession "
-            "within the next 12 months\" (window) definition would print somewhat higher, more "
-            "persistent probabilities; the Boston Fed has documented material dispersion between "
-            "the two.",
+            "Target definition · window, with one frozen exception.",
+            "The dependent variable is <code>y_t = 1</code> if an NBER recession occurs in any "
+            "month from <code>t+1</code> to <code>t+12</code> — the \"within 12 months\" reading "
+            "the headline implies. The re-estimated models (NY Fed, Wright, BIC) are trained on "
+            "this window target; the closed-form <b>Estrella–Mishkin</b> model keeps its frozen "
+            "2006 point-in-time coefficients, so it sits on a slightly different basis within the "
+            "ensemble. The point-in-time variant prints lower, spikier numbers and can miss "
+            "short recessions; the Boston Fed has documented material dispersion between the two.",
         ),
         (
             "Feature selection · in-sample.",
