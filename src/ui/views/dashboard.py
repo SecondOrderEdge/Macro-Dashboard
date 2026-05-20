@@ -671,7 +671,7 @@ def _cape_fade(hex_color: str, alpha: float) -> str:
 
 
 def _row_financial_conditions(panel: pd.DataFrame, nber: pd.Series) -> None:
-    """Four parallel display indicators: NFCI / ANFCI / STLFSI4 / CFNAI3MA.
+    """Four parallel display indicators: NFCI / ANFCI / STLFSI4 / CFNAIMA3.
 
     Framed as a *real-time financial+activity nowcast* row — separate from
     the recession ensemble (no probit input). These complement the Sahm Rule
