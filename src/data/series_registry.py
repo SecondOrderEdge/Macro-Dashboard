@@ -59,6 +59,19 @@ SERIES_REGISTRY: dict[str, dict] = {
 
     # Real-time recession nowcast — Sahm Rule (no NBER look-ahead).
     "sahm": {"fred_id": "SAHMREALTIME", "freq": "M", "transform": "level"},
+
+    # Financial-conditions indices (all weekly, pulled for display only).
+    "nfci":    {"fred_id": "NFCI",    "freq": "W", "transform": "level"},
+    "anfci":   {"fred_id": "ANFCI",   "freq": "W", "transform": "level"},
+    "stlfsi":  {"fred_id": "STLFSI4", "freq": "W", "transform": "level"},
+
+    # Chicago Fed National Activity Index — coincident, monthly, with a
+    # canonical recession-signal threshold of CFNAI3MA < -0.7.
+    "cfnai":     {"fred_id": "CFNAI",     "freq": "M", "transform": "level"},
+    "cfnai_3ma": {"fred_id": "CFNAI3MA",  "freq": "M", "transform": "level"},
+
+    # Atlanta Fed Wage Growth Tracker — 12-month MA of median wage growth.
+    "wage_tracker": {"fred_id": "FRBATLWGT12MMUMHWGO", "freq": "M", "transform": "level"},
 }
 
 

@@ -42,6 +42,7 @@ def render(panel: pd.DataFrame, nber: pd.Series, model: LAME | None = None) -> N
 
     _render_top(history, model, nber)
     _render_sahm_rule(panel, nber)
+    _render_wage_tracker(panel, nber)
     _render_breakdown(model)
     _render_diffusion(model, nber)
     _render_small_multiples(model, nber)
@@ -232,6 +233,81 @@ def _render_sahm_rule(panel: pd.DataFrame, nber: pd.Series) -> None:
         "unemployment rate (in real time, with no look-ahead) and has triggered at the "
         "onset of every U.S. recession since 1970. A reading near or above 0.5pp is the "
         "headline real-time recession signal. Source: <code>SAHMREALTIME</code> on FRED."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_wage_tracker(panel: pd.DataFrame, nber: pd.Series) -> None:
+    """Atlanta Fed Wage Growth Tracker — median wage growth, 12-month MA.
+
+    Useful as a labor-pressure gauge that's independent of unemployment.
+    Sustained readings above ~4.5% historically coincide with Fed tightening
+    cycles; sustained readings below ~3% reflect labor-market slack.
+    """
+    from src.models.conditions import wage_tracker, wage_band
+
+    wage = wage_tracker(panel)
+    if wage.empty:
+        return
+
+    latest = float(wage.iloc[-1])
+    label, severity = wage_band(latest)
+    color = {
+        "low":      PALETTE["risk_low"],
+        "elevated": PALETTE["risk_elevated"],
+        "high":     PALETTE["risk_high"],
+        "critical": PALETTE["risk_critical"],
+    }[severity]
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">Atlanta Fed wage growth tracker · 12-month MA</div>',
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1, 3])
+    with left:
+        spark = sparkline_svg(wage.tail(120).values, color=color)
+        st.markdown(
+            metric_card(
+                label="Wage growth (median)",
+                value=f"{latest:.1f}",
+                unit="%",
+                risk_color_hex=color,
+                sparkline_html=spark,
+                badge=label,
+                subline=f"as of {wage.index[-1].strftime('%b %Y')}",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=wage.index, y=wage.values, mode="lines",
+                line=dict(color=color, width=1.4),
+                fill="tozeroy", fillcolor=_fade(color, 0.10),
+                name="Median wage growth",
+                hovertemplate="%{x|%b %Y}<br>%{y:.1f}%<extra></extra>",
+            )
+        )
+        long_run = float(wage.mean())
+        fig.add_hline(
+            y=long_run, line=dict(color=PALETTE["text_tiny"], width=1, dash="dot"),
+            annotation_text=f"long-run avg {long_run:.1f}%",
+            annotation_position="bottom right",
+            annotation_font=dict(color=PALETTE["text_tiny"], size=10),
+        )
+        add_recession_shading(fig, nber)
+        fig.update_yaxes(title="% YoY")
+        apply_template(fig, height=300, show_legend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
+        "Tracks the median YoY wage growth of workers who held a job in both reference months — "
+        "by construction immune to compositional shifts. Source: <code>FRBATLWGT12MMUMHWGO</code> on FRED."
         "</div></div>",
         unsafe_allow_html=True,
     )
