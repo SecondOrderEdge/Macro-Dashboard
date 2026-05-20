@@ -499,10 +499,16 @@ def _render_scenario(report: dict) -> None:
     st.markdown(
         f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
         "<p>Move the drivers and watch the probability respond. This perturbs the "
-        "<b>BIC-selected multivariate model</b> — the one specification of the five with "
+        "<b>BIC-selected multivariate model</b> — the one specification of the four with "
         "multiple tunable inputs — recomputing Φ(β·x) directly from its fitted coefficients "
         "(no refit). Every non-moved driver is held at its current value, so each reading is a "
         "<i>ceteris paribus</i> what-if, not a forecast of joint moves.</p>"
+        "<p>Each slider is tagged with the direction it pushes risk, read from its fitted "
+        "coefficient. Some <i>level</i> indicators — the unemployment rate is the classic case — "
+        "<b>lower</b> modeled risk as they rise: the target is forward-looking, and recessions are "
+        "preceded by low, late-cycle unemployment, while a high level means the downturn is "
+        "already underway. It's the <i>rate of change</i> (e.g. the 3-month change in "
+        "unemployment), not the level, that flags a coming recession.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -526,14 +532,17 @@ def _render_scenario(report: dict) -> None:
             span = (hi - lo) or abs(cur) or 1.0
             lo_s, hi_s = lo - 0.05 * span, hi + 0.05 * span
             step = max(span / 200.0, 1e-4)
+            coef = float(s.get("coef", coefs.get(feat, 0.0)))
+            direction = "↑ raises risk" if coef > 0 else "↑ lowers risk"
             val = st.slider(
-                f"{feature_label(feat)}",
+                f"{feature_label(feat)}  ·  {direction}",
                 min_value=float(round(lo_s, 4)),
                 max_value=float(round(hi_s, 4)),
                 value=float(cur),
                 step=float(step),
                 key=f"scenario_{feat}",
-                help=f"{feat} · current {cur:g} · historical range [{lo:g}, {hi:g}]",
+                help=f"{feat} · current {cur:g} · historical range [{lo:g}, {hi:g}] · "
+                     f"raising it {'increases' if coef > 0 else 'decreases'} modeled recession probability",
             )
             overrides[feat] = val
 
