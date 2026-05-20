@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data.series_registry import SERIES_REGISTRY
+from src.data.series_registry import SERIES_REGISTRY, label_for
 from src.models.recession_probit import THRESHOLD_ELEVATED, feature_label
 from src.ui.components import add_recession_shading, apply_template, reliability_diagram
 from src.ui.theme import PALETTE
@@ -156,12 +156,12 @@ def _data_sources() -> None:
 
     rows = []
     for key, meta in SERIES_REGISTRY.items():
-        desc = SERIES_DESCRIPTIONS.get(key, {"name": key, "unit": "—"})
+        desc = SERIES_DESCRIPTIONS.get(key, {})
         rows.append(
             {
                 "FRED ID": meta["fred_id"],
-                "Description": desc["name"],
-                "Unit": desc["unit"],
+                "Description": label_for(key),
+                "Unit": desc.get("unit", "—"),
                 "Native freq.": _freq_label(meta["freq"]),
                 "Transform": meta["transform"],
                 "Sign": _sign_label(meta.get("sign")),

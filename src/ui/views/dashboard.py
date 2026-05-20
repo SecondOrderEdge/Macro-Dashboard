@@ -744,10 +744,10 @@ def _row_financial_conditions(panel: pd.DataFrame, nber: pd.Series) -> None:
                 unsafe_allow_html=True,
             )
 
-    _stress_card  (cols[0], "NFCI",      nfci_s,    "Chicago Fed · financial conditions")
-    _stress_card  (cols[1], "ANFCI",     anfci_s,   "Chicago Fed · adjusted")
-    _stress_card  (cols[2], "STLFSI4",   stlfsi_s,  "St Louis Fed · financial stress")
-    _activity_card(cols[3], "CFNAI 3-mo", cfnai_s,  "Chicago Fed · activity")
+    _stress_card  (cols[0], "Financial Conditions",        nfci_s,    "Chicago Fed · NFCI")
+    _stress_card  (cols[1], "Adjusted Financial Conditions", anfci_s, "Chicago Fed · ANFCI")
+    _stress_card  (cols[2], "Financial Stress",            stlfsi_s,  "St Louis Fed · STLFSI4")
+    _activity_card(cols[3], "Economic Activity (3-mo)",    cfnai_s,   "Chicago Fed · CFNAI")
 
     # Combined chart with dual y-axis (stress on left, activity on right).
     fig = go.Figure()
