@@ -194,7 +194,7 @@ def main() -> None:
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
             models = _build_models(
-                "v5-fed-conditions",
+                "v6-sofr",
                 exclude_pandemic=st.session_state.get("exclude_pandemic", True),
             )
     except Exception as exc:
