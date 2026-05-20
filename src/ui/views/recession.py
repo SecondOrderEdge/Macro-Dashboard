@@ -1,9 +1,9 @@
-"""Recession page — five-model academic probit ensemble.
+"""Recession page — four-model probit ensemble (plus a coincident benchmark).
 
 Three tabs surface the same analytics the weekly investment-committee email
-reports: The Reading (headline + history + drivers), Under the Hood (the five
-models, comparison, bootstrap CI, indicator percentiles), and Watchlist
-(trigger levels, adverse scenario, what-would-change-our-view).
+reports: The Reading (headline + history + drivers), Under the Hood (the four
+forward models + coincident benchmark, comparison, indicator percentiles),
+Watchlist (trigger levels, adverse scenario), and Scenario (what-if sliders).
 
 The report dict is produced by :mod:`src.models.recession_probit`.
 """
@@ -141,7 +141,7 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
     with left:
         st.markdown(
             metric_card(
-                label="12-month recession probability · 5-model ensemble",
+                label="12-month recession probability · 4-model ensemble",
                 value=f"{ens:.0f}",
                 unit="%",
                 risk_color_hex=color,
@@ -188,7 +188,7 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
             x=ens_hist.index, y=ens_hist.values, mode="lines",
             line=dict(color=PALETTE["accent"], width=1.6),
             fill="tozeroy", fillcolor=_fade(PALETTE["accent"], 0.12),
-            name="5-model ensemble",
+            name="4-model ensemble",
             hovertemplate="%{x|%b %Y}<br>%{y:.0f}%<extra>Ensemble</extra>",
         )
     )
@@ -223,7 +223,7 @@ def _reading_text(report: dict) -> str:
     p_lo, p_hi = min(probs.values()), max(probs.values())
     consensus = report["consensus"].lower()
     parts = [
-        f"Our five-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
+        f"Our four-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
         f"recession within 12 months — consistent with <b>{_consistent_with(ens)}</b>."
     ]
     lo, hi = report.get("ci_lower"), report.get("ci_upper")
@@ -272,28 +272,34 @@ def _attribution_block(report: dict) -> str:
 
 def _render_under_hood(report: dict) -> None:
     probs = report["model_probabilities"]
+    benchmarks = report.get("benchmark_probabilities") or {}
     ens = report["ensemble_probability"]
 
-    # Model cards: ensemble first, then the five specifications.
-    order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin", "Chauvet-Piger"]
-    cards = [("5-model ensemble", ens, True)] + [
-        (name, probs[name], False) for name in order if name in probs
-    ]
+    # Cards: the ensemble, then the four forward (12-month-ahead) models, then
+    # any coincident benchmarks shown separately (not part of the average).
+    order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin"]
+    cards = [("4-model ensemble", ens, "ensemble")] + [
+        (name, probs[name], "forward") for name in order if name in probs
+    ] + [(name, val, "benchmark") for name, val in benchmarks.items()]
     cols = st.columns(len(cards))
-    for col, (name, val, is_ens) in zip(cols, cards):
+    for col, (name, val, kind) in zip(cols, cards):
         with col:
             st.markdown(
                 metric_card(
                     label=name,
                     value=f"{val:.0f}",
                     unit="%",
-                    risk_color_hex=PALETTE["accent"] if is_ens else _prob_color(val),
-                    subline="ensemble" if is_ens else "12m probability",
+                    risk_color_hex=PALETTE["accent"] if kind == "ensemble" else _prob_color(val),
+                    subline={
+                        "ensemble": "mean of 4 forward models",
+                        "forward": "12m-ahead probability",
+                        "benchmark": "coincident · not in ensemble",
+                    }[kind],
                 ),
                 unsafe_allow_html=True,
             )
 
-    # Model comparison bar.
+    # Model comparison bar (forward models only; the ensemble is the dashed line).
     st.markdown(
         '<div class="label-small" style="margin-top:16px;">Model comparison · do the specifications agree?</div>',
         unsafe_allow_html=True,
@@ -311,16 +317,26 @@ def _render_under_hood(report: dict) -> None:
     )
     fig.add_vline(x=ens, line=dict(color=PALETTE["accent"], width=1, dash="dash"))
     fig.add_vline(x=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
-    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(s.max() * 1.25, 40)])
+    max_x = max(s.max(), *(benchmarks.values() if benchmarks else [0]))
+    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(max_x * 1.25, 40)])
     apply_template(fig, height=300, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
+    bench_txt = ""
+    if "Chauvet-Piger" in benchmarks:
+        bench_txt = (
+            f" <b>Chauvet-Piger</b> ({benchmarks['Chauvet-Piger']:.0f}%) is shown separately as a "
+            "<i>coincident</i> benchmark — FRED's smoothed Markov-switching nowcast "
+            "(<code>RECPROUSM156N</code>) of whether we're in recession <i>now</i>, a different "
+            "horizon — so it is excluded from the ensemble average."
+        )
     st.markdown(
         f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
-        "All five probabilities are computed live from FRED — none are hand-entered. "
+        "All probabilities are computed live from FRED — none are hand-entered. "
         "<b>NY Fed</b> and <b>Estrella-Mishkin</b> use the 10y-3m term spread; <b>Wright</b> adds the fed funds rate; "
-        "<b>BIC-selected</b> is a sign-constrained multivariate probit; <b>Chauvet-Piger</b> is FRED's smoothed "
-        "Markov-switching series (<code>RECPROUSM156N</code>). The ensemble is their equal-weighted average."
+        "<b>BIC-selected</b> is a sign-constrained multivariate probit. The ensemble is the equal-weighted "
+        "average of these four 12-month-ahead models."
+        f"{bench_txt}"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -559,7 +575,7 @@ def _render_scenario(report: dict) -> None:
     st.markdown(
         f'<div class="panel" style="margin-top:12px;border-color:{PALETTE["panel_border"]};">'
         f'<div class="panel-body" style="font-size:11px;color:{PALETTE["text_muted"]};line-height:1.6;">'
-        "<b>Reading this honestly.</b> This is the BIC model alone, not the five-model ensemble "
+        "<b>Reading this honestly.</b> This is the BIC model alone, not the four-model ensemble "
         f"headline ({report['ensemble_probability']:.0f}%). It assumes each driver moves "
         "independently — real downturns move them together, so a realistic joint move would "
         "typically push the probability higher than any single-slider change implies. Slider "

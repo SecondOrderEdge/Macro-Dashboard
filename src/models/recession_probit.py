@@ -1,15 +1,19 @@
-"""Five-model probit recession ensemble (12-month-ahead).
+"""Probit recession ensemble (12-month-ahead) + coincident benchmark.
 
 Ported from the standalone Recession_Probability_Model repo that drives the
-weekly investment-committee email. This engine runs five *methodologically
-distinct* academic specifications over a shared 37-series FRED universe and
-averages them:
+weekly investment-committee email. The headline ensemble is the equal-weighted
+mean of four *methodologically distinct* 12-month-ahead specifications over a
+shared 37-series FRED universe:
 
 1. **NY Fed**         — probit on the 10y-3m term spread alone (Estrella-Mishkin 1998).
 2. **Wright**         — probit on spread + fed funds rate (Wright 2006).
 3. **BIC-selected**   — forward-stepwise probit, sign-constrained, <=9 features.
 4. **Estrella-Mishkin** — closed form with frozen 2006 parameters.
-5. **Chauvet-Piger**  — FRED's smoothed Markov-switching series (RECPROUSM156N).
+
+**Chauvet-Piger** (FRED's smoothed Markov-switching series RECPROUSM156N) is
+reported alongside as a *coincident* benchmark — it nowcasts whether we are in
+recession now, a different horizon — and is deliberately excluded from the
+ensemble average so horizons aren't blended.
 
 On top of the ensemble it produces the analytics the email reports: a bootstrap
 90% CI on the BIC model, per-indicator watchlist trigger levels (the exact value
@@ -365,7 +369,7 @@ def _prepare(raw: pd.DataFrame) -> dict:
 
 
 def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_seed: int = 42) -> dict:
-    """Fit all five models and assemble the full analytics report.
+    """Fit the four forward models (+ Chauvet-Piger benchmark) and assemble the report.
 
     ``raw`` is a month-start indexed DataFrame of raw FRED levels (see
     :func:`fetch_probit_panel`). Returns a dict mirroring the email's
@@ -398,18 +402,24 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     latest_vals, _ = _latest_values(data, bic_selected)
     if latest_vals is None:
         raise RuntimeError("No complete recent observation for the BIC features.")
+
+    # Forward (12-month-ahead) models — these form the ensemble.
     model_probs: dict[str, float] = {}
     for name, m in models.items():
         x, _ = _latest_values(data, m["features"])
         if x is None:
             continue
         model_probs[name] = _prob(m["res"].params.values, x)
-
     if "SPREAD" in data.columns:
         spread_val = float(data["SPREAD"].dropna().iloc[-1])
         model_probs["Estrella-Mishkin"] = float(_stats.norm.cdf(_EM_CONST + _EM_SPREAD * spread_val) * 100)
+
+    # Coincident benchmark — NOT part of the ensemble. Chauvet-Piger answers
+    # "are we in recession now?" (smoothed nowcast), a different horizon from the
+    # four 12-month-ahead models, so averaging it in would blend horizons.
+    benchmarks: dict[str, float] = {}
     if "RECPROUSM156N" in data.columns and not data["RECPROUSM156N"].dropna().empty:
-        model_probs["Chauvet-Piger"] = float(data["RECPROUSM156N"].dropna().iloc[-1])
+        benchmarks["Chauvet-Piger"] = float(data["RECPROUSM156N"].dropna().iloc[-1])
 
     ensemble_prob = float(np.mean(list(model_probs.values())))
     bic_prob = _prob(res_bic.params.values, latest_vals)
@@ -500,6 +510,7 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         "consensus": consensus,
         "prob_range": round(prob_range, 2),
         "model_probabilities": {k: round(v, 2) for k, v in model_probs.items()},
+        "benchmark_probabilities": {k: round(v, 2) for k, v in benchmarks.items()},
         "bic_selected_features": bic_selected,
         "bic_const": float(res_bic.params.iloc[0]),
         "bic_coefficients": {feat: float(res_bic.params.iloc[j + 1]) for j, feat in enumerate(bic_selected)},
@@ -607,8 +618,9 @@ def _history(predict_df, data, models, res_bic, bic_selected):
             _stats.norm.cdf(_EM_CONST + _EM_SPREAD * data["SPREAD"].values) * 100,
             index=data.index,
         )
-    cp_series = data["RECPROUSM156N"] if "RECPROUSM156N" in data.columns else None
 
+    # Chauvet-Piger is a coincident benchmark and is intentionally excluded from
+    # the ensemble average (different forecast horizon).
     rows = []
     for dt in predict_df.index:
         vals = []
@@ -619,8 +631,6 @@ def _history(predict_df, data, models, res_bic, bic_selected):
                 vals.append(_prob(m["res"].params.values, x))
         if em_series is not None and dt in em_series.index and np.isfinite(em_series.loc[dt]):
             vals.append(float(em_series.loc[dt]))
-        if cp_series is not None and dt in cp_series.index and np.isfinite(cp_series.loc[dt]):
-            vals.append(float(cp_series.loc[dt]))
         rows.append(np.mean(vals) if vals else np.nan)
     ensemble_history = pd.Series(rows, index=predict_df.index, name="ensemble").dropna()
     return ensemble_history, bic_history.dropna()
@@ -671,12 +681,13 @@ def walk_forward(
 ) -> pd.Series:
     """True out-of-sample ensemble probability (%), refit on expanding windows.
 
-    At each refit date the re-estimated models (NY Fed, Wright, BIC) are fit
-    using only observations whose 12-month-ahead label was already known by that
-    date (t <= refit_ts - 12 months), then used to predict every month until the
-    next refit. Estrella-Mishkin (closed form) and Chauvet-Piger (a published
-    series) are inherently out-of-sample. No future data — features or labels —
-    enters any prediction.
+    The ensemble here is the four forward (12-month-ahead) models — NY Fed,
+    Wright, BIC (re-estimated) and Estrella-Mishkin (closed form). Chauvet-Piger
+    is a coincident benchmark and is excluded. At each refit date the re-estimated
+    models are fit using only observations whose 12-month-ahead label was already
+    known by that date (t <= refit_ts - 12 months), then used to predict every
+    month until the next refit. No future data — features or labels — enters any
+    prediction.
 
     The BIC *feature set* is selected once on the full sample (parameters are
     re-estimated out-of-sample, selection is not) — the same in-sample-selection
@@ -698,7 +709,6 @@ def walk_forward(
         pd.Series(_stats.norm.cdf(_EM_CONST + _EM_SPREAD * data["SPREAD"].values) * 100, index=data.index)
         if "SPREAD" in data.columns else None
     )
-    cp = data["RECPROUSM156N"] if "RECPROUSM156N" in data.columns else None
 
     start_ts = pd.Timestamp(oos_start)
     end_ts = model_df.index.max()
@@ -739,8 +749,6 @@ def walk_forward(
                 vals.append(_prob(fitted[name], row.astype(float).values))
             if em is not None and ts in em.index and np.isfinite(em.loc[ts]):
                 vals.append(float(em.loc[ts]))
-            if cp is not None and ts in cp.index and np.isfinite(cp.loc[ts]):
-                vals.append(float(cp.loc[ts]))
             if vals:
                 monthly[ts] = float(np.mean(vals))
 

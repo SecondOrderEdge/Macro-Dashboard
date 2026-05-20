@@ -205,7 +205,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v11-scenario-oosfix")
+            models = _build_models("v12-cp-benchmark")
     except Exception as exc:
         _header(None)
         _nav()

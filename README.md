@@ -12,13 +12,13 @@
 
 A single-indicator recession model gives you a precise number and the false comfort of a precise number. The 10-year/3-month yield curve has the best track record of any single signal in the post-war U.S. sample, and it has nonetheless run hot for stretches when the rest of the economy was demonstrably fine. Street estimates routinely disagree by twenty or thirty percentage points without disclosing what is driving the spread.
 
-The dashboard responds with three independent lenses that can disagree readably. A five-model probit ensemble (NY Fed, Wright, BIC-selected, Estrella–Mishkin, Chauvet–Piger) estimates 12-month recession probability live from a 37-series FRED universe. A 10-indicator labor composite (LAME) summarises the regime in a single inverse-volatility-weighted z-score. A yield-curve module exposes the term structure and inversion statistics directly. The headline is a 0–100 composite built from a 50/25/25 weighted blend.
+The dashboard responds with three independent lenses that can disagree readably. A four-model probit ensemble (NY Fed, Wright, BIC-selected, Estrella–Mishkin) estimates 12-month recession probability live from a 37-series FRED universe, with Chauvet–Piger shown alongside as a coincident benchmark. A 10-indicator labor composite (LAME) summarises the regime in a single inverse-volatility-weighted z-score. A yield-curve module exposes the term structure and inversion statistics directly. The headline is a 0–100 composite built from a 50/25/25 weighted blend.
 
 What's novel — for a public dashboard — is the transparent decomposition. Every cell of the headline can be opened: each model reports its probability, the watchlist reports the exact indicator value that would trip a higher reading, and the LAME breakdown shows the z-score, weight, and contribution of each of its ten indicators. When the models disagree, the disagreement is auditable.
 
 ## The three modules
 
-**Recession ensemble.** Five methodologically distinct probit specifications — NY Fed (term spread), Wright (spread + fed funds), BIC-selected (sign-constrained multivariate), Estrella–Mishkin (closed form), and Chauvet–Piger (FRED's smoothed Markov-switching series) — estimated over a shared 37-series FRED universe on an expanding window from 1967. The ensemble probability is the arithmetic mean. Calibration is measured by Brier score and AUC both in-sample and via a walk-forward backtest, each with a reliability diagram.
+**Recession ensemble.** Four methodologically distinct 12-month-ahead probit specifications — NY Fed (term spread), Wright (spread + fed funds), BIC-selected (sign-constrained multivariate), and Estrella–Mishkin (closed form) — estimated over a shared 37-series FRED universe on an expanding window from 1967; the ensemble probability is their arithmetic mean. Chauvet–Piger (FRED's smoothed Markov-switching series) is reported alongside as a *coincident* benchmark and excluded from the average so forecast horizons aren't blended. Calibration is measured by Brier score and AUC both in-sample and via a walk-forward backtest, each with a reliability diagram.
 
 **LAME — Labor Aggregate Market Engine.** Ten labor indicators (`UNRATE`, `ICSA`, `CCSA`, `JTSJOL`, `JTSQUR`, `AWHAETP`, `TEMPHELPS`, `PAYEMS`, `U6RATE`, `CIVPART`) are transformed per the registry, signed so that positive means expansionary, z-scored against their own expanding-window history, and combined with inverse-volatility weights computed from a rolling 5-year window.
 
@@ -28,7 +28,7 @@ What's novel — for a public dashboard — is the transparent decomposition. Ev
 
 The BIC-selected model is built by forward-stepwise selection over the full FRED universe: a candidate feature is accepted only if it improves BIC, does not induce quasi-complete separation, and keeps every coefficient on the economically correct side (lower spread → higher risk; rising unemployment → higher risk; weaker sentiment and contracting credit → higher risk). The NY Fed and Wright models are re-estimated probits on fixed feature sets; Estrella–Mishkin uses frozen 2006 coefficients; Chauvet–Piger is FRED's published `RECPROUSM156N`.
 
-The dependent variable is the point-in-time NBER target (`USREC` at month t+12). Estimation uses an expanding sample from 1967 onward. The ensemble is the simple arithmetic mean of the five model probabilities. The walk-forward backtest re-estimates coefficients on data strictly before each refit date (BIC feature selection is done once on the full sample — an in-sample-selection caveat noted on the methodology page).
+The dependent variable is the point-in-time NBER target (`USREC` at month t+12). Estimation uses an expanding sample from 1967 onward. The ensemble is the simple arithmetic mean of the four forward-model probabilities. The walk-forward backtest re-estimates coefficients on data strictly before each refit date (BIC feature selection is done once on the full sample — an in-sample-selection caveat noted on the methodology page).
 
 LAME's expanding-window z-scoring requires a minimum of 60 monthly observations. Inverse-volatility weights are computed from the rolling 5-year volatility of each signed z-score; weights are normalised to sum to 1 at every date, with indicators with missing readings dropping out of the basket for that month.
 
@@ -49,11 +49,11 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-The first load fetches the FRED panel, fits the five-model ensemble, and runs the walk-forward backtest (tens of seconds); subsequent loads come from Streamlit's cache for six hours. Tests run with `pytest` and do not require network access.
+The first load fetches the FRED panel, fits the four-model ensemble, and runs the walk-forward backtest (tens of seconds); subsequent loads come from Streamlit's cache for six hours. Tests run with `pytest` and do not require network access.
 
-## Recession page — five-model probit ensemble
+## Recession page — four-model probit ensemble + benchmark
 
-The Recession page runs five methodologically distinct, academically grounded models over a shared FRED universe and averages them: **NY Fed** (term-spread probit), **Wright** (spread + fed funds), **BIC-selected** (sign-constrained multivariate probit), **Estrella–Mishkin** (closed form), and **Chauvet–Piger** (FRED's smoothed Markov-switching series `RECPROUSM156N`). It also reports a bootstrap 90% CI, per-indicator watchlist trigger levels, and a 24-month trend attribution. Every model probability is computed live from FRED — there are no hand-entered comparison values.
+The Recession page averages four methodologically distinct, academically grounded 12-month-ahead models over a shared FRED universe: **NY Fed** (term-spread probit), **Wright** (spread + fed funds), **BIC-selected** (sign-constrained multivariate probit), and **Estrella–Mishkin** (closed form). **Chauvet–Piger** (FRED's smoothed Markov-switching series `RECPROUSM156N`) is shown beside them as a coincident benchmark — it nowcasts whether we're in recession now, a different horizon — and is excluded from the ensemble average. The page also reports a bootstrap 90% CI, per-indicator watchlist trigger levels, a 24-month trend attribution, and an interactive scenario tool. Every model probability is computed live from FRED — there are no hand-entered comparison values.
 
 ## Data notes
 

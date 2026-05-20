@@ -290,13 +290,15 @@ def _labor_section() -> None:
 # ---------------------------------------------------------------- recession
 
 
+# Four forward (12-month-ahead) models that form the ensemble, plus the
+# coincident benchmark shown separately.
 _PROBIT_MODELS = [
     ("NY Fed", "10y-3m term spread", "Re-estimated probit", "Estrella & Mishkin (1998)"),
     ("Wright", "Spread + fed funds rate", "Re-estimated probit", "Wright (2006)"),
     ("BIC-selected", "Data-driven, sign-constrained", "Forward-stepwise BIC", "Berge (2014)"),
     ("Estrella-Mishkin", "10y-3m term spread", "Closed form, frozen 2006 params", "Estrella & Trubin (2006)"),
-    ("Chauvet-Piger", "Markov-switching", "FRED RECPROUSM156N (published)", "Chauvet & Piger"),
 ]
+_PROBIT_BENCHMARK = ("Chauvet-Piger", "Markov-switching (coincident)", "FRED RECPROUSM156N — benchmark, not in ensemble", "Chauvet & Piger")
 
 
 def _recession_section(probit: dict | None) -> None:
@@ -304,12 +306,13 @@ def _recession_section(probit: dict | None) -> None:
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
-        "<p>The headline probability is the equal-weighted mean of five "
-        "<b>methodologically distinct</b> recession models, each estimating the probability "
-        "of an NBER recession 12 months ahead over a shared 37-series FRED universe. "
-        "Diversifying across model structure — from a single-variable yield-curve probit to "
-        "a multivariate BIC model to a Markov-switching benchmark — guards against any one "
-        "specification's blind spot.</p>"
+        "<p>The headline probability is the equal-weighted mean of four "
+        "<b>methodologically distinct</b> 12-month-ahead models, each estimating the "
+        "probability of an NBER recession 12 months ahead over a shared 37-series FRED "
+        "universe. Diversifying across model structure — from a single-variable yield-curve "
+        "probit to a multivariate BIC model — guards against any one specification's blind "
+        "spot. A fifth series, Chauvet–Piger, is reported as a coincident benchmark but "
+        "excluded from the average (see below).</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
         "y_t = 1 if NBER recession at month t+12   (point-in-time target)\n"
         "P(y_t = 1 | x_t) = Φ(β_0 + β'x_t)"
@@ -322,10 +325,15 @@ def _recession_section(probit: dict | None) -> None:
         "economically correct side (lower spread → higher risk; rising unemployment → "
         "higher risk; weaker sentiment and contracting credit → higher risk).</p>"
         "<p><b>Estimation.</b> Expanding window from <b>1967-01-01</b>, minimum 120 months. "
-        "Estrella-Mishkin uses frozen published parameters; Chauvet-Piger is FRED's "
-        "smoothed Markov-switching series pulled live.</p>"
-        "<p><b>Aggregation.</b> Equal-weighted mean of the five probabilities — deliberately "
-        "avoiding letting the yield curve dominate when it disagrees with the broader panel.</p>"
+        "Estrella-Mishkin uses frozen published parameters.</p>"
+        "<p><b>Aggregation.</b> Equal-weighted mean of the four forward probabilities — "
+        "deliberately avoiding letting the yield curve dominate when it disagrees with the "
+        "broader panel.</p>"
+        "<p><b>Why Chauvet–Piger is a benchmark, not an input.</b> It is a <i>coincident</i> "
+        "smoothed Markov-switching nowcast (FRED <code>RECPROUSM156N</code>) — it estimates "
+        "whether we are in recession <i>now</i>, not 12 months ahead. Averaging a coincident "
+        "nowcast with forward models would blend forecast horizons, so it is shown alongside "
+        "for context but kept out of the ensemble.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -334,10 +342,10 @@ def _recession_section(probit: dict | None) -> None:
         f'<div class="submodel-row"><span class="name">{name}</span>'
         f'<span class="value" style="text-align:right;color:{PALETTE["text_muted"]};">'
         f"{feats} · {method} · {ref}</span></div>"
-        for name, feats, method, ref in _PROBIT_MODELS
+        for name, feats, method, ref in [*_PROBIT_MODELS, _PROBIT_BENCHMARK]
     )
     st.markdown(
-        '<div class="label-small" style="margin-top:12px;">The five models</div>'
+        '<div class="label-small" style="margin-top:12px;">Four-model ensemble + coincident benchmark</div>'
         f'<div class="panel"><div class="panel-body">{body}</div></div>',
         unsafe_allow_html=True,
     )
@@ -637,7 +645,7 @@ def _limitations() -> None:
         ),
         (
             "Model comparison · fully live.",
-            "The five-model comparison is computed live from FRED on every rebuild — no "
+            "The model comparison is computed live from FRED on every rebuild — no "
             "hand-entered street estimates. The Chauvet–Piger reading is FRED's smoothed "
             "Markov-switching series (<code>RECPROUSM156N</code>); the others are probit "
             "specifications re-estimated on the FRED panel.",
@@ -669,7 +677,7 @@ def _reproducibility() -> None:
         f'style="color:{PALETTE["accent"]};">github.com/SecondOrderEdge/Macro-Dashboard</a>. '
         "MIT licensed. No hidden constants — anything we assert here is in the code.</p>"
         "<p><b>Tests.</b> 33 deterministic pytest cases cover probability bounds, the "
-        "five-model ensemble, BIC selection and sign constraints, walk-forward calibration, "
+        "four-model ensemble, BIC selection and sign constraints, walk-forward calibration, "
         "z-score normalisation, weight summation, spread calculation, inversion detection, "
         "and composite banding. Tests use synthetic data and never hit the FRED API.</p>"
         "<p><b>Data attribution.</b> All macro time series © Federal Reserve Bank of "

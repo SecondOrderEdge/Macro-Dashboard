@@ -105,14 +105,20 @@ def test_report_core_fields(report):
     assert report["consensus"] in {"STRONG", "MODERATE", "WEAK"}
 
 
-def test_report_has_five_models(report):
+def test_report_has_four_forward_models(report):
     probs = report["model_probabilities"]
-    for name in ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin", "Chauvet-Piger"]:
+    for name in ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin"]:
         assert name in probs
         assert 0 <= probs[name] <= 100
 
 
-def test_report_ensemble_is_mean_of_models(report):
+def test_chauvet_piger_is_a_separate_benchmark(report):
+    # Coincident benchmark must be reported but excluded from the ensemble inputs.
+    assert "Chauvet-Piger" not in report["model_probabilities"]
+    assert "Chauvet-Piger" in report["benchmark_probabilities"]
+
+
+def test_report_ensemble_is_mean_of_forward_models_only(report):
     probs = list(report["model_probabilities"].values())
     assert report["ensemble_probability"] == pytest.approx(np.mean(probs), abs=0.05)
 

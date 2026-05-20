@@ -98,7 +98,7 @@ def _recession_card(current: dict, history: pd.DataFrame) -> None:
     <div style="display:flex;align-items:flex-start;gap:24px;">
       <div>
         <div class="metric-big data-font" style="color:{color};">{ensemble_now:.0f}<span class="metric-unit">%</span></div>
-        <div class="metric-sub">5-model ensemble</div>
+        <div class="metric-sub">4-model ensemble</div>
         <div style="margin-top:10px;">{spark}</div>
       </div>
       <div style="flex:1;min-width:0;">
