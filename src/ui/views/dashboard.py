@@ -45,6 +45,7 @@ def render(
     _row_two(history, lame_hist, spreads, nber)
     _row_three(ensemble_now, lame_now, curve_now, composite, current)
     _row_weight_sensitivity(ensemble_now, lame_now, curve_now)
+    _row_financial_conditions(panel, nber)
     _row_valuation_cape(nber)
     _row_four_analogues(history, lame_hist, spreads, nber, ensemble_now, lame_now, curve_now)
 
@@ -643,3 +644,207 @@ def _cape_fade(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
+
+
+# --------------------------------------------------------- financial conditions
+
+
+def _row_financial_conditions(panel: pd.DataFrame, nber: pd.Series) -> None:
+    """Four parallel display indicators: NFCI / ANFCI / STLFSI4 / CFNAI3MA.
+
+    Framed as a *real-time financial+activity nowcast* row — separate from
+    the recession ensemble (no probit input). These complement the Sahm Rule
+    (labor-only nowcast) with broader financial and activity coverage.
+    """
+    from src.models.conditions import (
+        nfci, anfci, stlfsi, cfnai_3ma,
+        stress_band, cfnai_band,
+    )
+
+    nfci_s    = nfci(panel)
+    anfci_s   = anfci(panel)
+    stlfsi_s  = stlfsi(panel)
+    cfnai_s   = cfnai_3ma(panel)
+
+    if nfci_s.empty and anfci_s.empty and stlfsi_s.empty and cfnai_s.empty:
+        return  # nothing to render
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">'
+        'Financial conditions & activity · real-time nowcasts</div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(4)
+
+    def _stress_card(col, label, series, source_note):
+        if series.empty:
+            with col:
+                st.markdown(metric_card(label, "—", ""), unsafe_allow_html=True)
+            return
+        latest = float(series.iloc[-1])
+        as_of = series.index[-1].strftime("%b %Y")
+        band, sev = stress_band(latest)
+        color = _sev_color(sev)
+        spark = sparkline_svg(series.tail(260).values, color=color)
+        with col:
+            st.markdown(
+                metric_card(
+                    label=label,
+                    value=f"{latest:+.2f}",
+                    unit="σ",
+                    risk_color_hex=color,
+                    sparkline_html=spark,
+                    badge=band,
+                    subline=f"{source_note} · {as_of}",
+                ),
+                unsafe_allow_html=True,
+            )
+
+    def _activity_card(col, label, series, source_note):
+        if series.empty:
+            with col:
+                st.markdown(metric_card(label, "—", ""), unsafe_allow_html=True)
+            return
+        latest = float(series.iloc[-1])
+        as_of = series.index[-1].strftime("%b %Y")
+        band, sev = cfnai_band(latest)
+        color = _sev_color(sev)
+        spark = sparkline_svg(series.tail(120).values, color=color)
+        with col:
+            st.markdown(
+                metric_card(
+                    label=label,
+                    value=f"{latest:+.2f}",
+                    unit="",
+                    risk_color_hex=color,
+                    sparkline_html=spark,
+                    badge=band,
+                    subline=f"{source_note} · {as_of}",
+                ),
+                unsafe_allow_html=True,
+            )
+
+    _stress_card  (cols[0], "NFCI",      nfci_s,    "Chicago Fed · financial conditions")
+    _stress_card  (cols[1], "ANFCI",     anfci_s,   "Chicago Fed · adjusted")
+    _stress_card  (cols[2], "STLFSI4",   stlfsi_s,  "St Louis Fed · financial stress")
+    _activity_card(cols[3], "CFNAI 3-mo", cfnai_s,  "Chicago Fed · activity")
+
+    # Combined chart with dual y-axis (stress on left, activity on right).
+    fig = go.Figure()
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=25)
+
+    stress_pairs = [
+        ("NFCI",   nfci_s,   PALETTE["accent"]),
+        ("ANFCI",  anfci_s,  PALETTE["submodel"]["labor"]),
+        ("STLFSI", stlfsi_s, PALETTE["submodel"]["sentiment"]),
+    ]
+    for name, s, color in stress_pairs:
+        if s.empty:
+            continue
+        s_window = s.loc[s.index >= cutoff]
+        fig.add_trace(
+            go.Scatter(
+                x=s_window.index, y=s_window.values, mode="lines",
+                line=dict(color=color, width=1.2),
+                name=name, yaxis="y1",
+                hovertemplate=f"%{{x|%b %Y}}<br>%{{y:+.2f}}σ<extra>{name}</extra>",
+            )
+        )
+
+    if not cfnai_s.empty:
+        s_window = cfnai_s.loc[cfnai_s.index >= cutoff]
+        fig.add_trace(
+            go.Scatter(
+                x=s_window.index, y=s_window.values, mode="lines",
+                line=dict(color=PALETTE["submodel"]["yield_curve"], width=1.4, dash="dot"),
+                name="CFNAI 3-mo (right axis)", yaxis="y2",
+                hovertemplate="%{x|%b %Y}<br>%{y:+.2f}<extra>CFNAI 3-mo</extra>",
+            )
+        )
+
+    # Threshold reference lines
+    fig.add_hline(y=0, line=dict(color="#3d4754", width=1, dash="dot"))
+    fig.add_hline(
+        y=1.0, line=dict(color=PALETTE["risk_high"], width=1, dash="dash"),
+        annotation_text="stress threshold", annotation_position="bottom right",
+        annotation_font=dict(color=PALETTE["risk_high"], size=9),
+    )
+
+    add_recession_shading(fig, nber.loc[nber.index >= cutoff])
+    fig.update_layout(
+        yaxis=dict(title="Financial conditions (σ)", side="left"),
+        yaxis2=dict(title="CFNAI 3-mo", overlaying="y", side="right", showgrid=False),
+    )
+    apply_template(fig, height=340)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Plain-English read
+    _financial_conditions_read(nfci_s, cfnai_s)
+
+
+def _financial_conditions_read(nfci_s: pd.Series, cfnai_s: pd.Series) -> None:
+    from src.models.conditions import stress_band, cfnai_band
+
+    parts: list[str] = []
+    if not nfci_s.empty:
+        latest = float(nfci_s.iloc[-1])
+        band, _ = stress_band(latest)
+        if latest > 1.0:
+            parts.append(
+                f"<b>Financial conditions are stressed</b> — NFCI is {latest:+.2f}σ, "
+                "above the +1.0 historical stress threshold. Credit spreads, equity "
+                "volatility, and funding markets are simultaneously tighter than average."
+            )
+        elif latest > 0:
+            parts.append(
+                f"Financial conditions are <b>modestly tighter</b> than average "
+                f"(NFCI {latest:+.2f}σ). Not at stress levels."
+            )
+        else:
+            parts.append(
+                f"Financial conditions are <b>easier than average</b> (NFCI {latest:+.2f}σ). "
+                "Credit-driven recession scenarios are not gathering momentum."
+            )
+
+    if not cfnai_s.empty:
+        cval = float(cfnai_s.iloc[-1])
+        cband, _ = cfnai_band(cval)
+        if cval < -0.7:
+            parts.append(
+                f"The Chicago Fed activity composite (CFNAI 3-mo) reads {cval:+.2f} — "
+                "<b>below its -0.7 recession-signal threshold</b>. This is the canonical "
+                "real-time activity contraction signal."
+            )
+        elif cval < 0:
+            parts.append(
+                f"CFNAI 3-mo is {cval:+.2f}, slightly below trend but above the -0.7 "
+                "recession threshold."
+            )
+        else:
+            parts.append(
+                f"CFNAI 3-mo is {cval:+.2f}, above its long-run trend — activity is "
+                "running at or above potential growth."
+            )
+
+    if not parts:
+        return
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        + " ".join(parts) +
+        f'<p style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:10px;">'
+        "These indicators are <i>not</i> inputs to the recession ensemble — they're "
+        "parallel real-time nowcasts. NFCI/ANFCI/STLFSI4 sources: Chicago Fed and "
+        "St Louis Fed via FRED. CFNAI source: Chicago Fed via FRED."
+        "</p></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _sev_color(severity: str) -> str:
+    return {
+        "low":      PALETTE["risk_low"],
+        "elevated": PALETTE["risk_elevated"],
+        "high":     PALETTE["risk_high"],
+        "critical": PALETTE["risk_critical"],
+    }.get(severity, PALETTE["text_muted"])

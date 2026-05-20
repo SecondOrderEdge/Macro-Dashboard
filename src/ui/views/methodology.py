@@ -56,6 +56,15 @@ SERIES_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "vixcls": {"name": "CBOE VIX (S&P 500 implied volatility)", "unit": "index"},
     "usslind":{"name": "Philadelphia Fed State Coincident Leading Index", "unit": "index"},
     "sp500":  {"name": "S&P 500 index", "unit": "index"},
+    # External / parallel indicators (display only, not probit inputs)
+    "ny_fed_prob":   {"name": "NY Fed-style recession probability (Chauvet–Piger smoothed)", "unit": "percent"},
+    "sahm":          {"name": "Sahm Rule recession indicator (real-time)", "unit": "percentage points"},
+    "nfci":          {"name": "Chicago Fed National Financial Conditions Index", "unit": "z-score"},
+    "anfci":         {"name": "Chicago Fed Adjusted NFCI (macro-controlled)", "unit": "z-score"},
+    "stlfsi":        {"name": "St Louis Fed Financial Stress Index (STLFSI4)", "unit": "z-score"},
+    "cfnai":         {"name": "Chicago Fed National Activity Index", "unit": "z-score"},
+    "cfnai_3ma":     {"name": "CFNAI 3-month moving average (canonical threshold: −0.7)", "unit": "z-score"},
+    "wage_tracker":  {"name": "Atlanta Fed Wage Growth Tracker (median, 12-mo MA)", "unit": "percent"},
 }
 
 
