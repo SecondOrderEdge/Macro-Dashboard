@@ -9,7 +9,6 @@ import streamlit as st
 
 from src.models.composite import composite_risk
 from src.models.lame import LAME
-from src.models.recession_ensemble import RecessionEnsemble
 from src.models.yield_curve import YieldCurve
 from src.ui.components import (
     add_recession_shading,
@@ -21,13 +20,12 @@ from src.ui.theme import PALETTE, risk_color
 
 
 def render(
-    model: RecessionEnsemble,
+    current: dict,
+    history: pd.DataFrame,
     lame: LAME,
     panel: pd.DataFrame,
     nber: pd.Series,
 ) -> None:
-    current = model.predict_current()
-    history = model.predict_history()
     yc = YieldCurve(panel)
     spreads = yc.spreads_history()
     lame_hist = lame.history()
@@ -84,7 +82,7 @@ def _recession_card(current: dict, history: pd.DataFrame) -> None:
     sub_rows = ""
     for name, prob in current["submodels"].items():
         sub_color = PALETTE["submodel"].get(name, PALETTE["text_muted"])
-        label_pretty = name.replace("_", " ").title()
+        label_pretty = name
         sub_rows += (
             f'<div class="submodel-row"><span class="name" style="color:{sub_color};">{label_pretty}</span>'
             f'<span class="value">{prob:.0f}%</span></div>'
@@ -100,7 +98,7 @@ def _recession_card(current: dict, history: pd.DataFrame) -> None:
     <div style="display:flex;align-items:flex-start;gap:24px;">
       <div>
         <div class="metric-big data-font" style="color:{color};">{ensemble_now:.0f}<span class="metric-unit">%</span></div>
-        <div class="metric-sub">5-submodel ensemble</div>
+        <div class="metric-sub">5-model ensemble</div>
         <div style="margin-top:10px;">{spark}</div>
       </div>
       <div style="flex:1;min-width:0;">

@@ -39,6 +39,31 @@ def load_nber_recessions(
     return flag
 
 
+def load_recession_flags(start: str = "1950-01-01") -> pd.Series:
+    """Monthly recession-flag series, preferring FRED ``USREC`` over the CSV.
+
+    ``USREC`` is the NBER-based recession indicator published live on FRED, so
+    it auto-updates when the NBER dates a new cycle. If the fetch fails (no key,
+    no network) we fall back to the bundled ``data/nber_recessions.csv`` so the
+    dashboard still renders. The returned series matches
+    :func:`load_nber_recessions`: a month-start boolean indexed from ``start``.
+    """
+    try:
+        from src.data.fred_client import fetch_series
+
+        usrec = fetch_series("USREC", start)
+        s = pd.Series(usrec).dropna()
+        if s.empty:
+            raise RuntimeError("USREC returned no observations.")
+        s.index = pd.DatetimeIndex(s.index).to_period("M").to_timestamp()
+        flag = (s > 0)
+        flag = flag[~flag.index.duplicated(keep="last")].sort_index()
+        flag.name = "nber_recession"
+        return flag
+    except Exception:
+        return load_nber_recessions(start=start)
+
+
 def recession_in_next_12m(nber: pd.Series) -> pd.Series:
     """Forward-looking dependent variable: True if a recession occurs in [t+1, t+12].
 
