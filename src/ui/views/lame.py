@@ -328,11 +328,13 @@ def _render_small_multiples(model: LAME, nber: pd.Series) -> None:
     cutoff = pd.Timestamp.today() - pd.DateOffset(years=25)
     n_cols = 5
     n_rows = int(np.ceil(len(cols) / n_cols))
+    # Increase vertical spacing so subplot titles don't crash into the chart
+    # below them; bump rendered row height to give each chart breathing room.
     fig = make_subplots(
         rows=n_rows, cols=n_cols,
-        subplot_titles=cols,
+        subplot_titles=[c.upper() for c in cols],
         shared_yaxes=False,
-        horizontal_spacing=0.04, vertical_spacing=0.18,
+        horizontal_spacing=0.05, vertical_spacing=0.25,
     )
 
     for i, name in enumerate(cols):
@@ -353,39 +355,42 @@ def _render_small_multiples(model: LAME, nber: pd.Series) -> None:
             ),
             row=r, col=c,
         )
-        # Zero line + current value marker
         fig.add_hline(y=0, line=dict(color="#3d4754", width=1, dash="dot"), row=r, col=c)
+        # Current-value badge in the bottom-right of each subplot, in axis-
+        # fraction coordinates so it never collides with the subplot title.
         fig.add_annotation(
-            x=s.index[-1], y=latest,
-            text=f"{latest:+.2f}σ",
+            xref=f"x{i + 1} domain" if i > 0 else "x domain",
+            yref=f"y{i + 1} domain" if i > 0 else "y domain",
+            x=0.98, y=0.02,
+            text=f"<b>{latest:+.2f}σ</b>",
             showarrow=False,
-            font=dict(color=color, size=10),
+            font=dict(family="JetBrains Mono", color=color, size=11),
             xanchor="right", yanchor="bottom",
-            row=r, col=c,
+            bgcolor="rgba(10,13,18,0.7)",
+            borderpad=2,
         )
 
     fig.update_layout(
         paper_bgcolor="#0a0d12", plot_bgcolor="#0a0d12",
         font=dict(family="JetBrains Mono", color="#6b7280", size=9),
-        margin=dict(l=20, r=20, t=30, b=20),
-        height=300 * n_rows,
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=320 * n_rows,
         showlegend=False,
     )
     fig.update_xaxes(showgrid=False, color="#6b7280", tickfont=dict(size=8))
     fig.update_yaxes(gridcolor="#1f2630", zerolinecolor="#3d4754", color="#6b7280", tickfont=dict(size=8))
-    # Subplot title styling. fig.layout.annotations is a tuple of plotly
-    # Annotation objects which support attribute access but not .get(); use
-    # try/except so any layout-side annotation we didn't expect is skipped.
+    # Subplot title styling — keep them at Plotly's default centered position
+    # (overriding x/xanchor positions them in paper coords, which puts every
+    # title at the left edge of the full figure instead of each subplot).
+    upper_cols = {c.upper() for c in cols}
     for ann in fig.layout.annotations:
         try:
             text = ann.text
         except AttributeError:
             continue
-        if text in cols:
+        if text in upper_cols:
             ann.update(
-                font=dict(family="JetBrains Mono", color=PALETTE["accent"], size=10),
-                xanchor="left",
-                x=0.0,
+                font=dict(family="JetBrains Mono", color=PALETTE["text_primary"], size=12),
             )
     st.plotly_chart(fig, use_container_width=True)
 
