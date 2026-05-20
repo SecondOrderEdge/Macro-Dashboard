@@ -45,6 +45,7 @@ def render(
     _row_two(history, lame_hist, spreads, nber)
     _row_three(ensemble_now, lame_now, curve_now, composite, current)
     _row_weight_sensitivity(ensemble_now, lame_now, curve_now)
+    _row_valuation_cape(nber)
     _row_four_analogues(history, lame_hist, spreads, nber, ensemble_now, lame_now, curve_now)
 
 
@@ -471,3 +472,174 @@ def _row_weight_sensitivity(ensemble_now: float, lame_now: float, curve_now: flo
         f'<div class="panel-body">{body}</div></div>',
         unsafe_allow_html=True,
     )
+
+
+# --------------------------------------------------------- valuation (CAPE)
+
+
+def _row_valuation_cape(nber: pd.Series) -> None:
+    """CAPE ratio panel — equity-market valuation context.
+
+    Framed deliberately as a *valuation* indicator, not a recession signal.
+    CAPE has a poor short-horizon recession-prediction record but a strong
+    long-horizon equity-return record, and extreme readings materially
+    raise the conditional drawdown if recession does arrive.
+    """
+    from src.data.cape import fetch_cape_history, cape_summary, cape_band
+
+    cape = fetch_cape_history()
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">'
+        'Valuation context · Shiller CAPE ratio</div>',
+        unsafe_allow_html=True,
+    )
+
+    if cape is None or cape.empty:
+        st.markdown(
+            f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_muted"]};">'
+            "CAPE data temporarily unavailable. Source: "
+            '<a href="http://www.econ.yale.edu/~shiller/data.htm" '
+            f'style="color:{PALETTE["accent"]};">Robert Shiller / Yale</a>.'
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    summary = cape_summary(cape)
+    if not summary:
+        return
+
+    today = summary["today"]
+    pct = summary["modern_percentile"]
+    median = summary["modern_median"]
+    yr_ago = summary["one_year_ago"]
+    label, severity = cape_band(pct)
+    color = {
+        "low":      PALETTE["risk_low"],
+        "elevated": PALETTE["risk_elevated"],
+        "high":     PALETTE["risk_high"],
+        "critical": PALETTE["risk_critical"],
+    }[severity]
+
+    left, right = st.columns([1, 3])
+
+    with left:
+        spark = sparkline_svg(cape.tail(300).values, color=color)
+        subline = f"{pct:.0f}th percentile since 1950 · as of {summary['as_of'].strftime('%b %Y')}"
+        st.markdown(
+            metric_card(
+                label="Shiller CAPE",
+                value=f"{today:.1f}",
+                unit="×",
+                risk_color_hex=color,
+                sparkline_html=spark,
+                badge=label,
+                subline=subline,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        rows = [
+            ("Today",                f"{today:.1f}×"),
+            ("12 months ago",        f"{yr_ago:.1f}×" if np.isfinite(yr_ago) else "—"),
+            ("Median (post-1950)",   f"{median:.1f}×"),
+            ("2000 dot-com peak",    f"{summary['peaks']['2000 dot-com peak']:.1f}×" if np.isfinite(summary['peaks'].get('2000 dot-com peak', float('nan'))) else "—"),
+            ("2007 peak",            f"{summary['peaks']['2007 peak']:.1f}×" if np.isfinite(summary['peaks'].get('2007 peak', float('nan'))) else "—"),
+        ]
+        body = "".join(
+            f'<div class="submodel-row"><span class="name">{lbl}</span>'
+            f'<span class="value">{val}</span></div>'
+            for lbl, val in rows
+        )
+        st.markdown(
+            f'<div class="panel"><div class="panel-body">{body}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        modern = cape.loc[cape.index >= "1950-01-01"]
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=modern.index, y=modern.values, mode="lines",
+                line=dict(color=color, width=1.2),
+                fill="tozeroy", fillcolor=_cape_fade(color, 0.08),
+                name="CAPE", showlegend=False,
+                hovertemplate="%{x|%b %Y}<br>%{y:.1f}×<extra></extra>",
+            )
+        )
+        fig.add_hline(
+            y=median, line=dict(color=PALETTE["text_tiny"], width=1, dash="dot"),
+            annotation_text=f"median {median:.0f}", annotation_position="bottom right",
+            annotation_font=dict(color=PALETTE["text_tiny"], size=10),
+        )
+        # Mark famous peaks
+        for label_, dt in [("dot-com 2000", "2000-01-01"), ("2007 peak", "2007-10-01"), ("1929", "1929-09-01")]:
+            ts = pd.Timestamp(dt)
+            if ts in cape.index or (cape.index.min() <= ts <= cape.index.max()):
+                val = float(cape.asof(ts)) if hasattr(cape, "asof") else float("nan")
+                if np.isfinite(val):
+                    fig.add_annotation(
+                        x=ts, y=val,
+                        text=label_,
+                        showarrow=True, arrowhead=2, ax=0, ay=-22,
+                        arrowcolor=PALETTE["text_muted"], arrowwidth=1,
+                        font=dict(color=PALETTE["text_muted"], size=9),
+                        bgcolor="rgba(10,13,18,0.6)", borderpad=2,
+                    )
+        add_recession_shading(fig, nber.loc[nber.index >= "1950-01-01"])
+        fig.update_yaxes(title="CAPE multiple")
+        apply_template(fig, height=300, show_legend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Interpretation panel --------------------------------------------
+    if pct >= 85:
+        verdict = (
+            "Equity valuations sit in the <b>top 15%</b> of their post-1950 distribution. "
+            "CAPE at this level has historically preceded multi-year equity underperformance "
+            "rather than a near-term recession; the practical read is that the conditional "
+            "drawdown <i>if</i> a recession arrives is materially larger than it would be at "
+            "average valuations."
+        )
+    elif pct >= 60:
+        verdict = (
+            "Valuations are <b>above average but not extreme</b>. CAPE is not a useful "
+            "short-horizon recession signal at this level, but worth monitoring as a context "
+            "factor for the magnitude of potential drawdowns."
+        )
+    elif pct >= 25:
+        verdict = (
+            "Valuations are <b>around their post-1950 median</b>. Forward equity returns at "
+            "this CAPE level have historically been roughly average; valuation is not signalling "
+            "anything notable in either direction."
+        )
+    else:
+        verdict = (
+            "Valuations are in the <b>bottom quartile</b> of post-1950 history. Forward 10-year "
+            "real equity returns from these levels have historically been strong; a recession "
+            "would still hurt but the conditional drawdown floor is structurally less alarming."
+        )
+
+    st.markdown(
+        f'<div class="panel"><div class="panel-header"><span>How to read this</span></div>'
+        f'<div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        "<p>CAPE divides today's S&P 500 price by trailing <b>10-year inflation-adjusted "
+        "earnings</b>. It's a valuation gauge, not a recession indicator — CAPE was elevated "
+        "for most of 2014–2024 without a recession arriving. We surface it here because "
+        "valuation determines the <i>magnitude</i> of potential equity damage if a recession "
+        "does arrive.</p>"
+        f"<p>{verdict}</p>"
+        f'<p style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:8px;">'
+        'Source: <a href="http://www.econ.yale.edu/~shiller/data.htm" '
+        f'style="color:{PALETTE["accent"]};">Robert Shiller</a> · '
+        "monthly · fetched live."
+        "</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _cape_fade(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
