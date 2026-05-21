@@ -578,7 +578,14 @@ def _row_valuation_cape(nber: pd.Series) -> None:
     long-horizon equity-return record, and extreme readings materially
     raise the conditional drawdown if recession does arrive.
     """
-    from src.data.cape import fetch_cape_history, cape_summary, cape_band
+    from src.data.cape import (
+        cape_band,
+        cape_extras_summary,
+        cape_summary,
+        ecy_band,
+        fetch_cape_extras,
+        fetch_cape_history,
+    )
 
     cape = fetch_cape_history()
     st.markdown(
@@ -621,12 +628,18 @@ def _row_valuation_cape(nber: pd.Series) -> None:
     median = summary["modern_median"]
     yr_ago = summary["one_year_ago"]
     label, severity = cape_band(pct)
-    color = {
+    sev_to_color = {
         "low":      PALETTE["risk_low"],
         "elevated": PALETTE["risk_elevated"],
         "high":     PALETTE["risk_high"],
         "critical": PALETTE["risk_critical"],
-    }[severity]
+    }
+    color = sev_to_color[severity]
+
+    # Enrichment from the Shiller workbook: total-return CAPE and Excess CAPE Yield.
+    extras = cape_extras_summary(fetch_cape_extras())
+    tr = extras.get("tr_cape") or {}
+    ecy = extras.get("ecy") or {}
 
     left, right = st.columns([1, 3])
 
@@ -667,6 +680,30 @@ def _row_valuation_cape(nber: pd.Series) -> None:
             f'<div class="panel"><div class="panel-body">{body}</div></div>',
             unsafe_allow_html=True,
         )
+
+        # --- Rates-adjusted & total-return enrichment (Shiller workbook) -----
+        if tr or ecy:
+            extra_rows = ""
+            if tr:
+                tr_color = sev_to_color[cape_band(tr["modern_percentile"])[1]]
+                extra_rows += (
+                    f'<div class="submodel-row"><span class="name">TR CAPE · total return</span>'
+                    f'<span class="value" style="color:{tr_color};">{tr["today"]:.1f}× · '
+                    f'{tr["modern_percentile"]:.0f}th pct</span></div>'
+                )
+            if ecy:
+                ecy_label, ecy_sev = ecy_band(ecy["modern_percentile"])
+                ecy_color = sev_to_color[ecy_sev]
+                extra_rows += (
+                    f'<div class="submodel-row"><span class="name">Excess CAPE Yield</span>'
+                    f'<span class="value" style="color:{ecy_color};">{ecy["today"] * 100:.2f}% · '
+                    f'{ecy_label}</span></div>'
+                )
+            st.markdown(
+                '<div class="label-tiny" style="margin-top:10px;">Rates-adjusted & total-return</div>'
+                f'<div class="panel"><div class="panel-body">{extra_rows}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     with right:
         modern = cape.loc[cape.index >= "1950-01-01"]
@@ -732,6 +769,25 @@ def _row_valuation_cape(nber: pd.Series) -> None:
             "would still hurt but the conditional drawdown floor is structurally less alarming."
         )
 
+    ecy_note = ""
+    if ecy:
+        ev = ecy["today"] * 100.0
+        epct = ecy["modern_percentile"]
+        if epct < 15:
+            ecy_note = (
+                f"<p>The <b>Excess CAPE Yield</b> — the CAPE earnings yield minus the real "
+                f"10-year Treasury yield — is <b>{ev:.2f}%</b>, in the bottom {epct:.0f}% since "
+                "1950. Even after accounting for real rates, equities offer an unusually thin "
+                "cushion over bonds, which historically maps to weak forward excess returns.</p>"
+            )
+        else:
+            stance = "a below-average" if epct < 40 else "a reasonable"
+            ecy_note = (
+                f"<p>The <b>Excess CAPE Yield</b> (CAPE earnings yield minus the real 10-year "
+                f"Treasury yield) is <b>{ev:.2f}%</b> ({epct:.0f}th percentile since 1950) — "
+                f"{stance} equity-over-bond cushion once rates are taken into account.</p>"
+            )
+
     st.markdown(
         f'<div class="panel"><div class="panel-header"><span>How to read this</span></div>'
         f'<div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
@@ -741,6 +797,7 @@ def _row_valuation_cape(nber: pd.Series) -> None:
         "valuation determines the <i>magnitude</i> of potential equity damage if a recession "
         "does arrive.</p>"
         f"<p>{verdict}</p>"
+        f"{ecy_note}"
         f'<p style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:8px;">'
         'Sources: <a href="http://www.econ.yale.edu/~shiller/data.htm" '
         f'style="color:{PALETTE["accent"]};">Robert Shiller / Yale</a> (primary, fresh) and '

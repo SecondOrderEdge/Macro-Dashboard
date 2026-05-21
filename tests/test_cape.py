@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.data.cape import _load_bundled, _merge, cape_band, cape_summary
+from src.data.cape import (
+    _load_bundled,
+    _merge,
+    _parse_shiller_full,
+    cape_band,
+    cape_extras_summary,
+    cape_summary,
+    ecy_band,
+    fetch_cape_extras,
+)
 
 
 def _series(pairs, source):
@@ -65,3 +74,53 @@ def test_bundled_file_loads():
     s = _load_bundled([])
     assert not s.empty
     assert s.index.is_monotonic_increasing
+
+
+def test_ecy_band_inverted_vs_cape():
+    # High ECY (high percentile) is attractive; low ECY is rich.
+    assert ecy_band(90)[0] == "ATTRACTIVE"
+    assert ecy_band(5)[1] == "critical"
+
+
+def test_cape_extras_summary():
+    idx = pd.date_range("2000-01-01", periods=320, freq="MS")
+    ex = pd.DataFrame(
+        {"tr_cape": [20 + (i % 30) for i in range(len(idx))],
+         "ecy": [0.02 + 0.0001 * (i % 50) for i in range(len(idx))]},
+        index=idx,
+    )
+    summ = cape_extras_summary(ex)
+    assert summ["tr_cape"]["today"] == ex["tr_cape"].iloc[-1]
+    assert 0 <= summ["ecy"]["modern_percentile"] <= 100
+
+
+def test_parse_shiller_full_extracts_three_series():
+    df = pd.DataFrame({
+        "Date": [2026.03, 2026.04, 2026.05],
+        "CAPE": [36.94, 38.14, 39.58],
+        "TR CAPE": [39.47, 40.70, 42.22],
+        "Yield": [0.0178, 0.0163, 0.0139],
+    })
+    out = _parse_shiller_full(df)
+    assert list(out.columns) == ["date", "cape", "tr_cape", "ecy"]
+    assert out["date"].iloc[-1] == pd.Timestamp("2026-05-01")
+    assert out["cape"].iloc[-1] == 39.58
+    assert out["tr_cape"].iloc[-1] == 42.22
+    assert out["ecy"].iloc[-1] == 0.0139
+
+
+def test_parse_shiller_full_rejects_nonfraction_yield():
+    # If a 'Yield' column isn't the ECY fraction (values >> 1), it's dropped.
+    df = pd.DataFrame({
+        "Date": [2026.04, 2026.05],
+        "CAPE": [38.14, 39.58],
+        "Yield": [4.2, 4.1],  # looks like a bond yield in %, not ECY fraction
+    })
+    out = _parse_shiller_full(df)
+    assert out["ecy"].isna().all()
+
+
+def test_fetch_cape_extras_has_columns():
+    ex = fetch_cape_extras()
+    assert list(ex.columns) == ["tr_cape", "ecy"]
+    assert not ex.empty  # the committed cape.csv now carries the extras
