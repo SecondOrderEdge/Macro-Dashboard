@@ -434,12 +434,14 @@ def _policy_path_section() -> None:
         "<p><b>Why it is not a recession input.</b> It measures market <i>expectations</i> of "
         "policy, not recession risk, so it is shown as context and excluded from the composite "
         "and the probit ensemble.</p>"
-        "<p><b>Data handling — important.</b> Unlike every other panel, this one is <b>not live</b>. "
-        "The Atlanta Fed front end blocks automated fetching (and many hosts block the domain), "
-        "so the tab reads a <b>bundled CSV export</b> (<code>data/market_probability_tracker.csv</code>) "
-        "that is refreshed manually by replacing the file. It therefore does <i>not</i> auto-update "
-        "daily the way the source does; the in-app <i>snapshot as-of date</i> shows how fresh the "
-        "bundled copy is.</p>"
+        "<p><b>Data handling.</b> Unlike the FRED-backed panels, the app doesn't fetch this on "
+        "load; it reads a <b>bundled CSV</b> (<code>data/market_probability_tracker.csv</code>) "
+        "built from the Atlanta Fed's <i>MPT Historical Data</i> (.xlsx) export. A scheduled "
+        "<b>GitHub Action</b> (<code>.github/workflows/refresh-market-probability.yml</code>) "
+        "attempts a daily refresh — downloading the .xlsx, validating it through this same parser, "
+        "and committing the CSV only when it changes (which redeploys the app). If the source "
+        "blocks automated access, the last committed snapshot is served and can be refreshed by "
+        "replacing the file; the in-app <i>snapshot as-of date</i> shows how fresh the copy is.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )

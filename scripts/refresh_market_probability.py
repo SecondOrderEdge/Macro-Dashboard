@@ -21,17 +21,32 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TARGET = _ROOT / "data" / "market_probability_tracker.csv"
-_URL = os.environ.get("MPT_DATA_URL", "").strip()
+
+# The published "MPT Historical Data" download (an .xlsx). Override via the
+# MPT_DATA_URL env / Actions variable if the Atlanta Fed ever relocates it.
+_DEFAULT_URL = (
+    "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/"
+    "cenfis/market-probability-tracker/mpt_histdata.xlsx"
+)
+_URL = os.environ.get("MPT_DATA_URL", "").strip() or _DEFAULT_URL
 
 # The published "MPT Historical Data" download is an .xlsx; the in-repo file is
 # the long CSV the parser expects. These are the columns we serialise to.
 _EXPECTED_COLUMNS = ["date", "reference_start_date", "target_range", "field", "value"]
 
-# A real browser UA — the Atlanta Fed front end rejects obvious bots.
-_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+# Browser-like headers — the Atlanta Fed front end rejects obvious bots.
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+        "application/octet-stream,*/*"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.atlantafed.org/research-and-data/data/market-probability-tracker",
+}
 
 
 def _to_csv_text(raw: bytes) -> str | None:
@@ -69,15 +84,13 @@ def _to_csv_text(raw: bytes) -> str | None:
 
 
 def main() -> int:
-    if not _URL:
-        print(
-            "MPT_DATA_URL not set — skipping refresh. Set the repository Actions "
-            "variable MPT_DATA_URL to the tracker's data-download URL to enable."
-        )
+    if not _URL:  # only if both the variable and the baked-in default are blank
+        print("No download URL configured — skipping refresh.")
         return 0
 
+    print(f"Downloading Market Probability Tracker data from {_URL}")
     try:
-        req = urllib.request.Request(_URL, headers={"User-Agent": _USER_AGENT})
+        req = urllib.request.Request(_URL, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read()
     except Exception as exc:  # noqa: BLE001 - any network/HTTP failure

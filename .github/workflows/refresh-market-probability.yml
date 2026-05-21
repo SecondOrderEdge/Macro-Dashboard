@@ -1,8 +1,9 @@
 name: Refresh Market Probability Tracker
 
 # Keeps data/market_probability_tracker.csv current from the Atlanta Fed export.
-# Dormant until the repo Actions variable MPT_DATA_URL is set (the script then
-# exits 0 with a "skipping" message, so the scheduled run never fails red).
+# The download URL is baked into the script; set the repo Actions variable
+# MPT_DATA_URL only to override it. Requires Settings -> Actions -> General ->
+# Workflow permissions -> "Read and write" so the bot can commit.
 
 on:
   schedule:
