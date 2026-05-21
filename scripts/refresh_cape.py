@@ -26,13 +26,16 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _TARGET = _ROOT / "data" / "cape.csv"
 
-# Shiller moved off econ.yale.edu to shillerdata.com; try both. An override can
-# be supplied via CAPE_DATA_URL if the upload path rotates again.
+# Shiller's canonical .xls (econ.yale.edu) is reachable from CI and is the
+# freshest; posix4e/shiller_wrapper_data mirrors the same file weekly to GitHub
+# Pages as a fallback. shillerdata.com is kept too (its WordPress upload path
+# rotates, so it may 404). Override/extend via CAPE_DATA_URL. The script tries
+# all of these and keeps whichever returns the most recent month.
 _URLS = [
     os.environ.get("CAPE_DATA_URL", "").strip(),
-    "https://shillerdata.com/wp-content/uploads/ie_data.xls",
     "http://www.econ.yale.edu/~shiller/data/ie_data.xls",
-    "http://www.econ.yale.edu/~shiller/data/ie_data.xlsx",
+    "https://posix4e.github.io/shiller_wrapper_data/ie_data.xls",
+    "https://shillerdata.com/wp-content/uploads/ie_data.xls",
 ]
 
 _HEADERS = {
