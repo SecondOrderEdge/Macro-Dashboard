@@ -13,20 +13,24 @@ import numpy as np
 import pandas as pd
 
 
-def below_trend_breadth(zscores: pd.DataFrame) -> pd.Series:
+def below_trend_breadth(zscores: pd.DataFrame, min_coverage: float = 0.5) -> pd.Series:
     """Share of indicators below their own trend (signed z < 0), as a 0–100 %.
 
-    High = broad-based weakness. Months are skipped where no indicator has data.
+    High = broad-based weakness. Months with less than ``min_coverage`` of
+    indicators reporting are skipped, so the ragged right edge (where only the
+    fastest series have printed) doesn't produce a jumpy, low-N reading.
     """
     if zscores is None or zscores.empty:
         return pd.Series(dtype=float)
     valid = zscores.notna()
-    below = (zscores < 0) & valid
-    denom = valid.sum(axis=1).replace(0, np.nan)
-    return (below.sum(axis=1) / denom * 100.0).dropna()
+    n = valid.sum(axis=1)
+    keep = n >= max(1, int(np.ceil(min_coverage * zscores.shape[1])))
+    below = ((zscores < 0) & valid).sum(axis=1)
+    pct = (below / n.replace(0, np.nan) * 100.0)
+    return pct[keep].dropna()
 
 
-def momentum_breadth(zscores: pd.DataFrame, lookback: int = 3) -> pd.Series:
+def momentum_breadth(zscores: pd.DataFrame, lookback: int = 3, min_coverage: float = 0.5) -> pd.Series:
     """Share of indicators whose signed z-score *fell* over ``lookback`` months.
 
     High = deterioration is spreading (momentum breadth), independent of level.
@@ -35,29 +39,40 @@ def momentum_breadth(zscores: pd.DataFrame, lookback: int = 3) -> pd.Series:
         return pd.Series(dtype=float)
     delta = zscores - zscores.shift(lookback)
     valid = delta.notna()
-    falling = (delta < 0) & valid
-    denom = valid.sum(axis=1).replace(0, np.nan)
-    return (falling.sum(axis=1) / denom * 100.0).dropna()
+    n = valid.sum(axis=1)
+    keep = n >= max(1, int(np.ceil(min_coverage * zscores.shape[1])))
+    falling = ((delta < 0) & valid).sum(axis=1)
+    pct = (falling / n.replace(0, np.nan) * 100.0)
+    return pct[keep].dropna()
+
+
+def _last_valid_per_col(df: pd.DataFrame) -> pd.Series:
+    """Each column's most recent non-NaN value (ragged-edge aware)."""
+    return pd.Series(
+        {c: df[c].dropna().iloc[-1] for c in df.columns if df[c].notna().any()},
+        dtype=float,
+    )
 
 
 def breadth_snapshot(zscores: pd.DataFrame, lookback: int = 3) -> dict:
-    """Latest breadth counts: how many indicators are below trend / falling."""
-    if zscores is None or zscores.empty:
-        return {"below_trend": 0, "falling": 0, "total": 0,
-                "below_trend_pct": float("nan"), "falling_pct": float("nan")}
-    latest = zscores.dropna(how="all").iloc[-1]
-    valid = latest.notna()
-    total = int(valid.sum())
-    below = int(((latest < 0) & valid).sum())
+    """Latest breadth counts using each indicator's *own* freshest reading.
 
-    delta = (zscores - zscores.shift(lookback)).dropna(how="all")
-    if not delta.empty:
-        dlatest = delta.iloc[-1]
-        dvalid = dlatest.notna()
-        falling = int(((dlatest < 0) & dvalid).sum())
-        falling_total = int(dvalid.sum())
-    else:
-        falling, falling_total = 0, 0
+    Reading a single shared row would undercount at the ragged edge (where only
+    a couple of fast series have reported the current month); instead we take
+    the last valid value of each indicator.
+    """
+    empty = {"below_trend": 0, "falling": 0, "total": 0, "falling_total": 0,
+             "below_trend_pct": float("nan"), "falling_pct": float("nan")}
+    if zscores is None or zscores.empty:
+        return empty
+
+    latest = _last_valid_per_col(zscores)
+    total = int(latest.size)
+    below = int((latest < 0).sum())
+
+    dlatest = _last_valid_per_col(zscores - zscores.shift(lookback))
+    falling_total = int(dlatest.size)
+    falling = int((dlatest < 0).sum())
 
     return {
         "below_trend": below,

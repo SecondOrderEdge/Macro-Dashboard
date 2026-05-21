@@ -36,7 +36,9 @@ inject_theme()
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def _load_panel() -> pd.DataFrame:
+def _load_panel(cache_version: str) -> pd.DataFrame:
+    # cache_version participates in the key so adding a series to the registry
+    # (e.g. CFNAIDIFF) forces a refetch instead of serving a stale panel.
     return fetch_panel(fred_ids(), start="1959-01-01")
 
 
@@ -57,7 +59,7 @@ def _build_models(cache_version: str) -> dict:
     prefix: Streamlit skips underscore-prefixed args when computing the
     cache key, which silently neutralises any value you pass.
     """
-    panel = _load_panel()
+    panel = _load_panel(cache_version)
     nber = _load_nber()
 
     lame = LAME()
@@ -205,7 +207,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v13-window-target")
+            models = _build_models("v14-pulse-cfnaidiff")
     except Exception as exc:
         _header(None)
         _nav()
