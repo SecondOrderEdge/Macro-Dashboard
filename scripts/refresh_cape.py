@@ -59,14 +59,48 @@ def _existing_latest():
         return None
 
 
+def _shillerdata_url() -> str | None:
+    """Scrape shillerdata.com for the current ie_data.xls link.
+
+    The file lives under a rotating WordPress upload path, so a hardcoded URL
+    goes stale (404s). The homepage always links the latest file; find it.
+    """
+    import re
+
+    try:
+        req = urllib.request.Request("https://shillerdata.com/", headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  shillerdata.com scrape: {type(exc).__name__}: {exc}")
+        return None
+    m = re.search(r'href="([^"]*ie_data\.xls[^"]*)"', html)
+    if not m:
+        print("  shillerdata.com: ie_data.xls link not found on homepage")
+        return None
+    href = m.group(1)
+    if href.startswith("//"):
+        href = "https:" + href
+    elif href.startswith("/"):
+        href = "https://shillerdata.com" + href
+    return href
+
+
 def main() -> int:
     sys.path.insert(0, str(_ROOT))
     import pandas as pd
 
     from src.data.cape import _parse_shiller_excel
 
+    # Try the freshly-scraped shillerdata.com link first, then the static list.
+    scraped = _shillerdata_url()
+    urls: list[str] = []
+    for u in ([scraped] if scraped else []) + _URLS:
+        if u and u not in urls:
+            urls.append(u)
+
     best = None
-    for url in [u for u in _URLS if u]:
+    for url in urls:
         try:
             req = urllib.request.Request(url, headers=_HEADERS)
             with urllib.request.urlopen(req, timeout=60) as resp:
