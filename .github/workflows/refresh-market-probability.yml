@@ -27,7 +27,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install parser dependencies
-        run: pip install --quiet pandas numpy python-dotenv
+        run: pip install --quiet pandas numpy python-dotenv openpyxl
 
       - name: Download and validate tracker data
         env:

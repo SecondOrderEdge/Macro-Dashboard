@@ -23,11 +23,49 @@ _ROOT = Path(__file__).resolve().parents[1]
 _TARGET = _ROOT / "data" / "market_probability_tracker.csv"
 _URL = os.environ.get("MPT_DATA_URL", "").strip()
 
+# The published "MPT Historical Data" download is an .xlsx; the in-repo file is
+# the long CSV the parser expects. These are the columns we serialise to.
+_EXPECTED_COLUMNS = ["date", "reference_start_date", "target_range", "field", "value"]
+
 # A real browser UA — the Atlanta Fed front end rejects obvious bots.
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
+
+def _to_csv_text(raw: bytes) -> str | None:
+    """Coerce a download into long-CSV text, handling the .xlsx export.
+
+    The Atlanta Fed publishes "MPT Historical Data" as an .xlsx; we read the
+    sheet whose columns match the long schema and serialise it to CSV. A plain
+    CSV/TSV download is decoded as-is. Returns None (with a diagnostic) if the
+    payload is neither — e.g. an HTML block page.
+    """
+    if raw[:4] == b"PK\x03\x04":  # ZIP magic — .xlsx is a zip container
+        import io
+
+        import pandas as pd
+
+        try:
+            xls = pd.ExcelFile(io.BytesIO(raw))
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: could not open .xlsx download: {exc}")
+            return None
+        for sheet in xls.sheet_names:
+            df = xls.parse(sheet)
+            lower = {str(c).strip().lower(): c for c in df.columns}
+            if all(col in lower for col in _EXPECTED_COLUMNS):
+                df = df[[lower[col] for col in _EXPECTED_COLUMNS]]
+                df.columns = _EXPECTED_COLUMNS
+                return df.to_csv(index=False)
+        print(f"ERROR: no .xlsx sheet has the expected columns {_EXPECTED_COLUMNS}.")
+        for sheet in xls.sheet_names:
+            cols = list(xls.parse(sheet, nrows=0).columns)
+            print(f"  sheet {sheet!r} columns: {cols}")
+        return None
+
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def main() -> int:
@@ -46,8 +84,11 @@ def main() -> int:
         print(f"ERROR: download from MPT_DATA_URL failed: {exc}")
         return 1
 
+    text = _to_csv_text(raw)
+    if text is None:
+        return 1
     # Normalise newlines so identical data doesn't churn the file on CRLF diffs.
-    text = raw.decode("utf-8-sig", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.endswith("\n"):
         text += "\n"
 
