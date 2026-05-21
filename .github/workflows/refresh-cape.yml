@@ -1,0 +1,47 @@
+name: Refresh CAPE data
+
+# Keeps data/cape.csv current from Robert Shiller's spreadsheet. CAPE updates
+# monthly, so this runs on the 5th of each month (after Shiller posts). Requires
+# Settings -> Actions -> General -> Workflow permissions -> "Read and write".
+
+on:
+  schedule:
+    - cron: "0 13 5 * *"   # 5th of the month, 13:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-cape
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install parser dependencies
+        run: pip install --quiet pandas numpy python-dotenv openpyxl "xlrd<2.0"
+
+      - name: Download and validate CAPE data
+        env:
+          CAPE_DATA_URL: ${{ vars.CAPE_DATA_URL }}
+        run: python scripts/refresh_cape.py
+
+      - name: Commit if the data changed
+        run: |
+          if [[ -n "$(git status --porcelain data/cape.csv)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/cape.csv
+            git commit -m "Refresh CAPE data"
+            git push
+          else
+            echo "No change in CAPE data — nothing to commit."
+          fi

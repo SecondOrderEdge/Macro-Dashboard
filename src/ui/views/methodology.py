@@ -405,10 +405,14 @@ def _valuation_section() -> None:
         "potential equity damage conditional on a recession arriving. The same labor/credit/"
         "curve signal looks very different for an investor at the 90th percentile of CAPE "
         "than at the 30th percentile.</p>"
-        "<p><b>Source.</b> Fetched live from <a href=\"http://www.econ.yale.edu/~shiller/data.htm\" "
-        f'style="color:{PALETTE["accent"]};">Shiller\'s Yale page</a> (monthly, .xls); '
-        "percentile rank is computed against the post-1950 sample to avoid structural "
-        "breaks in the pre-WWII reporting cadence."
+        "<p><b>Source.</b> Robert Shiller's monthly CAPE series. A scheduled GitHub Action "
+        "(<code>.github/workflows/refresh-cape.yml</code>) refreshes a bundled "
+        "<code>data/cape.csv</code> from "
+        "<a href=\"https://shillerdata.com\" "
+        f'style="color:{PALETTE["accent"]};">Shiller\'s spreadsheet</a>; the app reads that '
+        "committed file and overlays the live source when reachable (an older datahub mirror "
+        "supplies deep history). Percentile rank is computed against the post-1950 sample to "
+        "avoid structural breaks in the pre-WWII reporting cadence."
         "</div></div>",
         unsafe_allow_html=True,
     )

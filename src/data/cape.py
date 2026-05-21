@@ -26,9 +26,12 @@ empty Series so the dashboard degrades gracefully rather than crashing.
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+_BUNDLED_PATH = Path(__file__).resolve().parents[2] / "data" / "cape.csv"
 
 
 _HEADERS = {
@@ -65,43 +68,63 @@ def _cache_data(*args: Any, **kwargs: Any):
 def fetch_cape_history() -> pd.Series:
     """Return a monthly-indexed CAPE Series, or an empty one on total failure.
 
-    Strategy:
+    Sources are overlaid in increasing order of freshness so the most recent
+    available value wins for each month:
 
-    1. Try Shiller's Excel at Yale first (the freshest source, updated
-       monthly by Shiller himself).
-    2. Try the datahub.io GitHub CSV mirror as fallback (long history but
-       updates lag by months or years depending on volunteer maintainers).
-    3. If both work, merge — use the GitHub series as the base and overlay
-       any newer Yale months on top.
+    1. **datahub GitHub CSV** — long history, but the mirror is unmaintained
+       (it has lagged by years), so it only fills old gaps.
+    2. **Bundled ``data/cape.csv``** — refreshed monthly by the refresh-cape
+       GitHub Action; this is the reliable, current base in deployment.
+    3. **Shiller's Excel (live)** — freshest if reachable, but the source blocks
+       bots in many environments, so it's best-effort on top.
 
     Errors during fetching/parsing are recorded on the returned Series via
     ``attrs['fetch_log']`` so the UI can surface them.
     """
     log: list[str] = []
-    yale_series = _try_fetch_yale(log)
     github_series = _try_fetch_github(log)
+    bundled_series = _load_bundled(log)
+    yale_series = _try_fetch_yale(log)
 
-    # Merge: GitHub provides the long base, Yale overlays newer months.
-    if not github_series.empty and not yale_series.empty:
-        merged = github_series.copy()
-        for ts, val in yale_series.items():
-            merged.loc[ts] = val
-        merged = merged.sort_index()
-        merged.attrs["source"] = (
-            f"yale-excel + github (yale latest: {yale_series.index[-1].strftime('%Y-%m')})"
-        )
-        merged.attrs["fetch_log"] = log
-        return merged
+    merged = _merge([github_series, bundled_series, yale_series])
+    if merged.empty:
+        return _empty(log)
+    merged.attrs["fetch_log"] = log
+    return merged
 
-    if not yale_series.empty:
-        yale_series.attrs["fetch_log"] = log
-        return yale_series
 
-    if not github_series.empty:
-        github_series.attrs["fetch_log"] = log
-        return github_series
+def _merge(series_list: list[pd.Series]) -> pd.Series:
+    """Overlay CAPE series in order; later (fresher) sources win per month."""
+    out = pd.Series(dtype=float, name="cape")
+    sources: list[str] = []
+    for s in series_list:
+        if s is None or s.empty:
+            continue
+        for ts, val in s.items():
+            out.loc[ts] = val
+        sources.append(s.attrs.get("source", "?"))
+    out = out.sort_index()
+    out.attrs["source"] = " + ".join(sources) if sources else "none"
+    return out
 
-    return _empty(log)
+
+def _load_bundled(log: list[str]) -> pd.Series:
+    """Read the committed ``data/cape.csv`` (date,cape), refreshed by the Action."""
+    try:
+        if not _BUNDLED_PATH.exists():
+            return pd.Series(dtype=float, name="cape")
+        df = pd.read_csv(_BUNDLED_PATH)
+        date_col = "date" if "date" in df.columns else df.columns[0]
+        val_col = "cape" if "cape" in df.columns else df.columns[-1]
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+        df = df.dropna(subset=[date_col, val_col])
+        s = pd.Series(df[val_col].astype(float).values, index=df[date_col], name="cape").sort_index()
+        s.attrs["source"] = "bundled:data/cape.csv"
+        return s
+    except Exception as exc:  # noqa: BLE001
+        log.append(f"bundled cape.csv: {type(exc).__name__}: {exc}")
+        return pd.Series(dtype=float, name="cape")
 
 
 def _try_fetch_yale(log: list[str]) -> pd.Series:
