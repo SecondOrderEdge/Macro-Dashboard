@@ -10,8 +10,11 @@ from src.data.gdp import (
     CONTRIBUTION_SERIES,
     HEADLINE_SERIES,
     coincident_factor,
+    factor_gdp_frame,
+    factor_prob_frame,
     fetch_gdp_bundle,
     latest,
+    pearson,
 )
 
 
@@ -115,3 +118,68 @@ def test_growth_render_smoke_empty(monkeypatch):
 def test_headline_ids_present():
     ids = [sid for sid, _ in HEADLINE_SERIES]
     assert "GDPNOW" in ids and "A191RL1Q225SBEA" in ids
+
+
+def test_factor_gdp_frame_aligns_and_correlates():
+    months = pd.date_range("2010-01-01", periods=120, freq="MS")
+    composite = pd.Series(np.linspace(-2, 2, 120), index=months)
+    # GDP roughly tracks the factor, sampled quarterly.
+    q = pd.date_range("2010-01-01", periods=40, freq="QS")
+    gdp = pd.Series(np.linspace(-1, 3, 40) + 1.0, index=q)
+    frame = factor_gdp_frame(composite, gdp)
+    assert list(frame.columns) == ["factor", "gdp"] and len(frame) >= 30
+    assert pearson(frame, "factor", "gdp") > 0.9  # both monotonic up
+
+
+def test_factor_gdp_frame_empty_inputs():
+    assert factor_gdp_frame(pd.Series(dtype=float), pd.Series(dtype=float)).empty
+
+
+def test_factor_prob_frame_and_pearson_sign():
+    months = pd.date_range("2000-01-01", periods=200, freq="MS")
+    composite = pd.Series(np.sin(np.arange(200) / 6.0), index=months)
+    prob = pd.Series(50 - 40 * np.sin(np.arange(200) / 6.0), index=months)  # inverse, 0-100
+    frame = factor_prob_frame(composite, prob)
+    assert list(frame.columns) == ["factor", "prob"]
+    assert pearson(frame, "factor", "prob") < -0.9
+
+
+def test_pearson_too_few_points():
+    df = pd.DataFrame({"a": [1.0, 2.0], "b": [2.0, 4.0]})
+    assert np.isnan(pearson(df, "a", "b"))
+
+
+def test_robust_range_ignores_outliers():
+    from src.ui.views.growth import _robust_range
+
+    vals = list(np.random.default_rng(0).normal(2, 1, 200)) + [-30.0, 35.0]  # COVID-like
+    lo, hi = _robust_range(vals)
+    assert lo > -10 and hi < 10  # outliers excluded from the view range
+
+
+def test_recession_prob_history_extraction():
+    from src.ui.views.growth import _recession_prob_history
+
+    assert _recession_prob_history(None).empty
+    assert _recession_prob_history({"error": "x"}).empty
+    s = pd.Series([10.0, 20.0], index=pd.date_range("2020-01-01", periods=2, freq="MS"))
+    out = _recession_prob_history({"ensemble_history": s})
+    assert len(out) == 2 and out.iloc[-1] == 20.0
+
+
+def test_growth_render_smoke_with_probit(monkeypatch):
+    from src.ui.views import growth
+
+    head = {
+        "A191RL1Q225SBEA": pd.Series(np.linspace(1, 3, 40), index=pd.date_range("2014-01-01", periods=40, freq="QS")),
+        "GDPNOW": pd.Series([2.4], index=[pd.Timestamp("2024-01-01")]),
+    }
+    contrib = {sid: pd.Series(np.linspace(0, 0.6, 40), index=pd.date_range("2014-01-01", periods=40, freq="QS")) for sid, _ in CONTRIBUTION_SERIES}
+    factor = {"composite": pd.Series(np.sin(np.arange(150) / 5.0), index=pd.date_range("2012-01-01", periods=150, freq="MS")), "components": pd.DataFrame(), "log": []}
+    probit = {"ensemble_history": pd.Series(40 - 20 * np.sin(np.arange(150) / 5.0), index=pd.date_range("2012-01-01", periods=150, freq="MS"))}
+
+    monkeypatch.setattr(growth, "fetch_gdp_bundle", lambda: {"headline": head, "contributions": contrib, "highfreq": {}, "log": []})
+    monkeypatch.setattr(growth, "coincident_factor", lambda: factor)
+
+    nber = pd.Series(False, index=pd.date_range("2012-01-01", periods=170, freq="MS"))
+    growth.render(nber, probit)  # exercises factor-validation + growth-vs-risk rows

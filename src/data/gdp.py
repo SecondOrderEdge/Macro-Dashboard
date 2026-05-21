@@ -143,3 +143,45 @@ def coincident_factor(start: str = "1960-01-01") -> dict:
     components = pd.concat(zframes, axis=1).sort_index()
     composite = components.mean(axis=1, skipna=True).rename("coincident")
     return {"composite": composite, "components": components, "log": log}
+
+
+# ----------------------------------------------------------- analysis helpers
+
+
+def _normalize_quarter_start(s: pd.Series) -> pd.Series:
+    """Snap a quarterly series' index to quarter-start timestamps for alignment."""
+    out = s.copy()
+    out.index = pd.DatetimeIndex(out.index).to_period("Q").to_timestamp(how="start")
+    return out
+
+
+def factor_gdp_frame(composite: pd.Series, gdp: pd.Series) -> pd.DataFrame:
+    """Align the (monthly) coincident factor with quarterly GDP growth.
+
+    The factor is averaged within each quarter; both are snapped to quarter
+    starts. Returns columns ``factor`` and ``gdp`` (empty if either is missing).
+    """
+    if composite is None or composite.empty or gdp is None or gdp.empty:
+        return pd.DataFrame(columns=["factor", "gdp"])
+    q = composite.resample("QS").mean().rename("factor")
+    g = _normalize_quarter_start(gdp.dropna()).rename("gdp")
+    return pd.concat([q, g], axis=1).dropna()
+
+
+def factor_prob_frame(composite: pd.Series, prob: pd.Series) -> pd.DataFrame:
+    """Align the coincident factor with the recession-probability history.
+
+    Both are monthly. Returns columns ``factor`` and ``prob`` (0–1), empty if
+    either is missing.
+    """
+    if composite is None or composite.empty or prob is None or prob.empty:
+        return pd.DataFrame(columns=["factor", "prob"])
+    return pd.concat([composite.rename("factor"), prob.rename("prob")], axis=1).dropna()
+
+
+def pearson(frame: pd.DataFrame, a: str, b: str) -> float:
+    """Pearson correlation between two columns, or NaN if too few points."""
+    if frame is None or len(frame) < 3 or a not in frame or b not in frame:
+        return float("nan")
+    return float(frame[a].corr(frame[b]))
+
