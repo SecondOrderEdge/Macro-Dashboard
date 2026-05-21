@@ -22,6 +22,7 @@ from src.models.breadth import (
     momentum_breadth,
 )
 from src.models.lame import LAME
+from src.models.market_implied import MARKET_IMPLIED_SIGNALS, signal_summary
 from src.ui.components import add_recession_shading, apply_template, metric_card, sparkline_svg
 from src.ui.theme import PALETTE
 
@@ -163,6 +164,68 @@ def render(panel: pd.DataFrame, nber: pd.Series, lame: LAME) -> None:
         "line is 50%) historically coincides with the early innings of recessions; isolated weakness "
         "in one or two series rarely does. Read this alongside the monthly ensemble: broad breadth "
         "deterioration is what turns a soft patch into a downturn."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    _render_market_implied(panel)
+
+
+def _render_market_implied(panel: pd.DataFrame) -> None:
+    """What the market is pricing — forward expectations from traded assets."""
+    rows = []
+    for fred_id, label, unit, fmt in MARKET_IMPLIED_SIGNALS:
+        if fred_id not in panel.columns:
+            continue
+        s = signal_summary(panel[fred_id])
+        if s["as_of"] is None:
+            continue
+        rows.append((label, unit, fmt, s))
+    if not rows:
+        return
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">Market-implied · what traded assets are pricing</div>',
+        unsafe_allow_html=True,
+    )
+
+    header = (
+        '<tr style="border-bottom:1px solid #1f2630;color:#6b7280;font-size:10px;'
+        'letter-spacing:0.08em;text-transform:uppercase;">'
+        "<th style='text-align:left;padding:6px 8px;'>Signal</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Latest</th>"
+        "<th style='text-align:right;padding:6px 8px;'>1m change</th>"
+        "<th style='text-align:right;padding:6px 8px;'>5y percentile</th></tr>"
+    )
+    body = []
+    for label, unit, fmt, s in rows:
+        val = fmt.format(s["latest"]) + (f" {unit}" if unit else "")
+        chg = f"{s['change']:+.2f}" if np.isfinite(s["change"]) else "—"
+        chg_color = PALETTE["text_muted"] if not np.isfinite(s["change"]) else (
+            PALETTE["risk_high"] if s["change"] > 0 else PALETTE["risk_low"] if s["change"] < 0 else PALETTE["text_muted"]
+        )
+        pct = f"{s['percentile']:.0f}th" if np.isfinite(s["percentile"]) else "—"
+        body.append(
+            f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
+            f'<td style="padding:6px 8px;">{label}'
+            f'<span style="color:#5a6470;font-size:10px;"> · {s["as_of"].strftime("%d %b %Y")}</span></td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{val}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;color:{chg_color};">{chg}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{pct}</td></tr>'
+        )
+    st.markdown(
+        '<div class="panel"><div class="panel-body"><table style="width:100%;border-collapse:collapse;">'
+        + header + "".join(body)
+        + "</table></div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="panel" style="margin-top:8px;border-color:{PALETTE["panel_border"]};">'
+        f'<div class="panel-body" style="font-size:11px;color:{PALETTE["text_muted"]};line-height:1.6;">'
+        "These are priced into traded assets in real time and are <b>not revised</b> — the cleanest, "
+        "most current read on what the market expects for inflation, real rates, growth (term spread), "
+        "and credit/funding stress. The 1-month change and 5-year percentile show direction and how "
+        "stretched each reading is versus its recent range."
         "</div></div>",
         unsafe_allow_html=True,
     )

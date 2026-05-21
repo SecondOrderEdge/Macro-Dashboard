@@ -62,6 +62,12 @@ SERIES_REGISTRY: dict[str, dict] = {
     # External / comparison probabilities (not used as inputs; pulled for display).
     "ny_fed_prob": {"fred_id": "RECPROUSM156N", "freq": "M", "transform": "level", "name": "Smoothed Recession Probability (Chauvet–Piger)"},
 
+    # Market-implied expectations (daily, display only) — forward expectations
+    # priced into traded assets; not revised.
+    "t5yifr": {"fred_id": "T5YIFR", "freq": "D", "transform": "level", "name": "5Y5Y Forward Inflation Expectation"},
+    "t10yie": {"fred_id": "T10YIE", "freq": "D", "transform": "level", "name": "10-Year Breakeven Inflation"},
+    "dfii10": {"fred_id": "DFII10", "freq": "D", "transform": "level", "name": "10-Year Real Yield (TIPS)"},
+
     # Real-time recession nowcast — Sahm Rule (no NBER look-ahead).
     "sahm": {"fred_id": "SAHMREALTIME", "freq": "M", "transform": "level", "name": "Sahm Rule Recession Indicator"},
 

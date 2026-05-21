@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.data.revisions import REVISION_SERIES, fetch_revision_pair, revision_summary
 from src.data.series_registry import SERIES_REGISTRY, label_for
 from src.models.recession_probit import THRESHOLD_ELEVATED, feature_label
 from src.ui.components import add_recession_shading, apply_template, reliability_diagram
@@ -91,6 +92,7 @@ def render(probit: dict | None = None) -> None:
     _calibration_section(probit)
     _walk_forward_section(probit)
     _nber_section()
+    _revisions_section()
     _limitations()
     _reproducibility()
 
@@ -599,8 +601,91 @@ def _nber_section() -> None:
 # ---------------------------------------------------------------- limitations
 
 
+def _revisions_section() -> None:
+    _section_header("12. Data revisions (ALFRED)")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>Official statistics are revised — sometimes enough to rewrite the story. Payroll "
+        "benchmark revisions have flipped reported job <i>growth</i> into <i>contraction</i> a year "
+        "after the fact. Backtesting on today's final-revised history therefore embeds look-ahead "
+        "bias: the model would appear to have known things the public didn't yet.</p>"
+        "<p>We mitigate this two ways. The recession target and Sahm signal use FRED's "
+        "<b>real-time</b> series (<code>USREC</code>, <code>SAHMREALTIME</code>) rather than "
+        "retroactively revised ones. And below we show, via ALFRED, how far each high-revision "
+        "series' <b>first public print</b> ends up moving from its <b>final-revised</b> value — the "
+        "magnitude of the bias a naive backtest would absorb. (Full point-in-time re-fitting on "
+        "as-of-date vintages is a batch pipeline, out of scope for the live app.)</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    summaries = []
+    for sid, label, unit in REVISION_SERIES:
+        pair = fetch_revision_pair(sid)
+        if pair is None or pair.empty:
+            continue
+        summ = revision_summary(pair["first"], pair["latest"])
+        if summ["n"]:
+            summaries.append((sid, label, unit, summ))
+
+    if not summaries:
+        st.info(
+            "Revision comparison unavailable (ALFRED fetch needs a live FRED key / network). "
+            "The real-time series the model relies on are unaffected."
+        )
+        return
+
+    header = (
+        '<tr style="border-bottom:1px solid #1f2630;color:#6b7280;font-size:10px;'
+        'letter-spacing:0.08em;text-transform:uppercase;">'
+        "<th style='text-align:left;padding:6px 8px;'>Series</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Obs</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Median revision</th>"
+        "<th style='text-align:right;padding:6px 8px;'>Mean abs revision</th>"
+        "<th style='text-align:right;padding:6px 8px;'>% revised down</th></tr>"
+    )
+    body = []
+    for sid, label, unit, summ in summaries:
+        body.append(
+            f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
+            f'<td style="padding:6px 8px;">{label}<span style="color:#5a6470;"> · {sid}</span></td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["n"]:,}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["median_revision"]:+.1f}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["mean_abs_revision"]:.1f}</td>'
+            f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["share_revised_down"]:.0f}%</td></tr>'
+        )
+    st.markdown(
+        '<div class="panel"><div class="panel-body"><table style="width:100%;border-collapse:collapse;">'
+        + header + "".join(body) + "</table></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Illustrative chart: first vs final-revised for the first series with data.
+    sid, label, unit, summ = summaries[0]
+    df = summ["aligned"].tail(240)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["first"].values, mode="lines",
+        line=dict(color=PALETTE["text_muted"], width=1, dash="dot"), name="First release",
+        hovertemplate="%{x|%b %Y}<br>%{y:.0f}<extra>first</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["latest"].values, mode="lines",
+        line=dict(color=PALETTE["accent"], width=1.6), name="Final revised",
+        hovertemplate="%{x|%b %Y}<br>%{y:.0f}<extra>revised</extra>",
+    ))
+    fig.update_yaxes(title=unit)
+    apply_template(fig, height=320)
+    st.markdown(
+        f'<div class="label-small" style="margin-top:8px;">{label} · first release vs final revised</div>',
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def _limitations() -> None:
-    _section_header("12. Limitations")
+    _section_header("13. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -672,7 +757,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("13. Reproducibility")
+    _section_header("14. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
