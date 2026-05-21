@@ -1,0 +1,47 @@
+name: Refresh Market Probability Tracker
+
+# Keeps data/market_probability_tracker.csv current from the Atlanta Fed export.
+# Dormant until the repo Actions variable MPT_DATA_URL is set (the script then
+# exits 0 with a "skipping" message, so the scheduled run never fails red).
+
+on:
+  schedule:
+    - cron: "30 12 * * *"   # daily, 12:30 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-market-probability
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install parser dependencies
+        run: pip install --quiet pandas numpy python-dotenv
+
+      - name: Download and validate tracker data
+        env:
+          MPT_DATA_URL: ${{ vars.MPT_DATA_URL }}
+        run: python scripts/refresh_market_probability.py
+
+      - name: Commit if the data changed
+        run: |
+          if [[ -n "$(git status --porcelain data/market_probability_tracker.csv)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/market_probability_tracker.csv
+            git commit -m "Refresh Market Probability Tracker data"
+            git push
+          else
+            echo "No change in tracker data — nothing to commit."
+          fi
