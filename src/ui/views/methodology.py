@@ -88,6 +88,7 @@ def render(probit: dict | None = None) -> None:
     _labor_section()
     _recession_section(probit)
     _valuation_section()
+    _policy_path_section()
     _composite_section()
     _calibration_section(probit)
     _walk_forward_section(probit)
@@ -106,7 +107,9 @@ def _heading() -> None:
         '<div style="font-family:Fraunces,serif;font-size:22px;color:#d4d4d0;margin-bottom:4px;">'
         "How the dashboard is built</div>"
         f'<div style="color:{PALETTE["text_muted"]};font-size:12px;letter-spacing:0.05em;">'
-        "Every chart on this dashboard is built from FRED data with the formulas below. "
+        "Every chart on this dashboard is built from public data — almost entirely FRED, "
+        "plus the Atlanta Fed Market Probability Tracker for the Policy Path view — with the "
+        "formulas below. "
         "Open the source code at <a href=\"https://github.com/SecondOrderEdge/Macro-Dashboard\" "
         f'style="color:{PALETTE["accent"]};">github.com/SecondOrderEdge/Macro-Dashboard</a>.'
         "</div>",
@@ -411,8 +414,47 @@ def _valuation_section() -> None:
     )
 
 
+def _policy_path_section() -> None:
+    _section_header("8. Policy path · market-implied FOMC expectations")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The <b>Policy Path</b> tab surfaces the Atlanta Fed's "
+        '<a href="https://www.atlantafed.org/cenfis/market-probability-tracker" '
+        f'style="color:{PALETTE["accent"]};">Market Probability Tracker</a>, which backs out the '
+        "market-implied probability distribution of the FOMC policy rate after each upcoming "
+        "quarterly contract from CME options on SOFR futures. It is a forward-looking, "
+        "market-priced complement to the (spot) Yield Curve module.</p>"
+        "<p><b>What we show.</b> For the latest snapshot: a fan chart of the published mean path "
+        "with its 25th–75th percentile band; a comparison of the mean path across recent "
+        "snapshots (how expectations have re-priced); a heatmap of the probability on each 25bp "
+        "target range per meeting; and the next-meeting hike/cut odds. The mean, mode, and "
+        "percentiles are taken <i>directly</i> from the Atlanta Fed export — we do not re-estimate "
+        "the distribution.</p>"
+        "<p><b>Why it is not a recession input.</b> It measures market <i>expectations</i> of "
+        "policy, not recession risk, so it is shown as context and excluded from the composite "
+        "and the probit ensemble.</p>"
+        "<p><b>Data handling — important.</b> Unlike every other panel, this one is <b>not live</b>. "
+        "The Atlanta Fed front end blocks automated fetching (and many hosts block the domain), "
+        "so the tab reads a <b>bundled CSV export</b> (<code>data/market_probability_tracker.csv</code>) "
+        "that is refreshed manually by replacing the file. It therefore does <i>not</i> auto-update "
+        "daily the way the source does; the in-app <i>snapshot as-of date</i> shows how fresh the "
+        "bundled copy is.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
+        "Implementation: <code>src/data/market_probability.py</code>, "
+        "<code>src/ui/views/rate_path.py</code>. Source data © Federal Reserve Bank of Atlanta; "
+        "derived from CME Group options on SOFR futures."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _composite_section() -> None:
-    _section_header("8. Composite construction")
+    _section_header("9. Composite construction")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -450,7 +492,7 @@ def _composite_section() -> None:
 
 
 def _calibration_section(probit: dict | None) -> None:
-    _section_header("9. Calibration · in-sample")
+    _section_header("10. Calibration · in-sample")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -510,7 +552,7 @@ def _calibration_panel(stats: dict | None, label: str) -> None:
 
 def _walk_forward_section(probit: dict | None) -> None:
     """Out-of-sample backtest: how the ensemble would have called recessions in real time."""
-    _section_header("10. Out-of-sample backtest")
+    _section_header("11. Out-of-sample backtest")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -571,7 +613,7 @@ def _walk_forward_section(probit: dict | None) -> None:
 
 
 def _nber_section() -> None:
-    _section_header("11. NBER recession dates")
+    _section_header("12. NBER recession dates")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -602,7 +644,7 @@ def _nber_section() -> None:
 
 
 def _revisions_section() -> None:
-    _section_header("12. Data revisions (ALFRED)")
+    _section_header("13. Data revisions (ALFRED)")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -685,7 +727,7 @@ def _revisions_section() -> None:
 
 
 def _limitations() -> None:
-    _section_header("13. Limitations")
+    _section_header("14. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -757,7 +799,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("14. Reproducibility")
+    _section_header("15. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
@@ -765,13 +807,16 @@ def _reproducibility() -> None:
         '<a href="https://github.com/SecondOrderEdge/Macro-Dashboard" '
         f'style="color:{PALETTE["accent"]};">github.com/SecondOrderEdge/Macro-Dashboard</a>. '
         "MIT licensed. No hidden constants — anything we assert here is in the code.</p>"
-        "<p><b>Tests.</b> 33 deterministic pytest cases cover probability bounds, the "
+        "<p><b>Tests.</b> 63 deterministic pytest cases cover probability bounds, the "
         "four-model ensemble, BIC selection and sign constraints, walk-forward calibration, "
         "z-score normalisation, weight summation, spread calculation, inversion detection, "
-        "and composite banding. Tests use synthetic data and never hit the FRED API.</p>"
+        "composite banding, and the Market Probability Tracker CSV parser. Tests use synthetic "
+        "or bundled data and never hit external APIs.</p>"
         "<p><b>Data attribution.</b> All macro time series © Federal Reserve Bank of "
         "St. Louis (FRED). High-yield OAS © ICE BofA. Recession dates © NBER. The S&P 500 "
-        "is an index of S&P Dow Jones Indices LLC.</p>"
+        "is an index of S&P Dow Jones Indices LLC. Market-implied policy-rate distributions "
+        "© Federal Reserve Bank of Atlanta (Market Probability Tracker), derived from CME "
+        "Group options on SOFR futures.</p>"
         "<p><b>Disclaimer.</b> This is a research and education project. It is not "
         "investment advice and carries no warranty.</p>"
         "</div></div>",

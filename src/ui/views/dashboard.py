@@ -217,7 +217,7 @@ def _row_policy_path(market_prob: pd.DataFrame | None) -> None:
             f'<span class="risk-badge" style="color:{lean_color};">{lean}</span></div>'
             '<div class="panel-body">'
             f'<div class="metric-big data-font" style="color:{PALETTE["accent"]};">{front_rate:.2f}<span class="metric-unit">%</span></div>'
-            f'<div class="metric-sub">mean · {front.strftime("%b %Y")} meeting</div>'
+            f'<div class="metric-sub">mean · {front.strftime("%b %Y")} meeting · as of {snap.strftime("%d %b %Y")}</div>'
             f'<div style="margin-top:10px;">'
             f'<div class="submodel-row"><span class="name" style="color:{PALETTE["risk_elevated"]};">Hike</span><span class="value">{hike_s}</span></div>'
             f'<div class="submodel-row"><span class="name" style="color:{PALETTE["risk_low"]};">Cut</span><span class="value">{cut_s}</span></div>'

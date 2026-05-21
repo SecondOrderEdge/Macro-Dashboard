@@ -95,7 +95,7 @@ def _cards(rp: pd.DataFrame, dirs_latest: pd.DataFrame, snap: pd.Timestamp) -> N
             f'<span class="risk-badge" style="color:{lean_color};">{lean}</span></div>'
             '<div class="panel-body">'
             f'<div class="metric-big data-font" style="color:{PALETTE["accent"]};">{front_rate:.2f}<span class="metric-unit">%</span></div>'
-            f'<div class="metric-sub">mean · {front_meeting.strftime("%b %Y")} meeting</div>'
+            f'<div class="metric-sub">mean · {front_meeting.strftime("%b %Y")} · as of {snap.strftime("%d %b %Y")}</div>'
             '</div></div>',
             unsafe_allow_html=True,
         )
