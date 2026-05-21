@@ -16,7 +16,7 @@ from src.models.lame import LAME
 from src.models.recession_probit import compute_probit_report
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
-from src.ui.views import curve, dashboard, methodology, recession
+from src.ui.views import curve, dashboard, methodology, pulse, recession
 from src.ui.views import lame as lame_view
 
 
@@ -27,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-NAV_OPTIONS = ["Macro Dashboard", "Recession", "Labor", "Yield Curve", "Methodology"]
+NAV_OPTIONS = ["Macro Dashboard", "Recession", "Pulse", "Labor", "Yield Curve", "Methodology"]
 
 inject_theme()
 
@@ -172,7 +172,7 @@ def _nav() -> str:
     selected = option_menu(
         menu_title=None,
         options=NAV_OPTIONS,
-        icons=["grid", "graph-down", "people", "activity", "book"],
+        icons=["grid", "graph-down", "reception-4", "people", "activity", "book"],
         orientation="horizontal",
         default_index=default_index,
         manual_select=manual_select,
@@ -223,6 +223,8 @@ def main() -> None:
         dashboard.render(rec_current, rec_history, models["lame"], models["panel"], models["nber"])
     elif selected == "Recession":
         recession.render(models.get("probit"), models["nber"])
+    elif selected == "Pulse":
+        pulse.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Labor":
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":
