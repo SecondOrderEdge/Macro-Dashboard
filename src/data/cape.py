@@ -93,6 +93,32 @@ def fetch_cape_history() -> pd.Series:
     return merged
 
 
+@_cache_data(ttl=604800, show_spinner=False)  # 7 days
+def fetch_cape_extras() -> pd.DataFrame:
+    """Total-return CAPE and Excess CAPE Yield, from the bundled ``cape.csv``.
+
+    These two series come only from Shiller's workbook (no live mirror provides
+    them), so they're read straight from ``data/cape.csv``. ``ecy`` is the
+    Excess CAPE Yield as a fraction (e.g. 0.0139 = 1.39%). Returns an empty
+    frame if those columns are absent (older CSV without the enrichment).
+    """
+    cols = ["tr_cape", "ecy"]
+    try:
+        if not _BUNDLED_PATH.exists():
+            return pd.DataFrame(columns=cols)
+        df = pd.read_csv(_BUNDLED_PATH)
+        if "date" not in df.columns:
+            return pd.DataFrame(columns=cols)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"]).set_index("date").sort_index()
+        out = pd.DataFrame(index=df.index)
+        for c in cols:
+            out[c] = pd.to_numeric(df[c], errors="coerce") if c in df.columns else float("nan")
+        return out
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=cols)
+
+
 def _merge(series_list: list[pd.Series]) -> pd.Series:
     """Overlay CAPE series in order; later (fresher) sources win per month."""
     out = pd.Series(dtype=float, name="cape")
@@ -306,3 +332,67 @@ def cape_band(percentile: float) -> tuple[str, str]:
     if percentile < 85:
         return "EXPENSIVE", "high"
     return "EXTREME", "critical"
+
+
+def ecy_band(percentile: float) -> tuple[str, str]:
+    """Band for the Excess CAPE Yield. Inverted vs CAPE: a *high* ECY (high
+    percentile) is attractive (equities offer a wide cushion over real bond
+    yields); a *low* ECY is rich."""
+    if percentile >= 75:
+        return "ATTRACTIVE", "low"
+    if percentile >= 40:
+        return "NEUTRAL", "elevated"
+    if percentile >= 15:
+        return "RICH", "high"
+    return "VERY RICH", "critical"
+
+
+def cape_extras_summary(extras: pd.DataFrame, modern_start: str = "1950-01-01") -> dict:
+    """Latest value, percentile, and median for tr_cape and ecy (post-1950)."""
+    if extras is None or extras.empty:
+        return {}
+    out: dict[str, dict] = {}
+    for col in ("tr_cape", "ecy"):
+        s = extras[col].dropna() if col in extras.columns else pd.Series(dtype=float)
+        if s.empty:
+            out[col] = {}
+            continue
+        today = float(s.iloc[-1])
+        modern = s.loc[s.index >= pd.Timestamp(modern_start)]
+        if modern.empty:
+            modern = s
+        out[col] = {
+            "today": today,
+            "as_of": s.index[-1],
+            "modern_percentile": float((modern <= today).mean() * 100.0),
+            "modern_median": float(modern.median()),
+        }
+    return out
+
+
+def _parse_shiller_full(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse the Shiller 'Data' sheet into date, cape, tr_cape, ecy.
+
+    Column labels in the workbook: ``CAPE``, ``TR CAPE``, and ``Yield`` (the
+    Excess CAPE Yield, stored as a fraction). The first column is the Yale
+    fractional date. Missing columns come back as NaN.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["date", "cape", "tr_cape", "ecy"])
+    date_col = df.columns[0]
+    out = pd.DataFrame()
+    out["date"] = df[date_col].apply(_yale_date_to_timestamp)
+
+    def _num(name: str) -> pd.Series:
+        return pd.to_numeric(df[name], errors="coerce") if name in df.columns else pd.Series([float("nan")] * len(df))
+
+    out["cape"] = _num("CAPE")
+    out["tr_cape"] = _num("TR CAPE")
+    ecy = _num("Yield")
+    # Guard: ECY is a small fraction; if 'Yield' isn't that column, drop it.
+    if ecy.notna().any() and ecy.abs().median() > 0.5:
+        ecy = pd.Series([float("nan")] * len(df))
+    out["ecy"] = ecy
+
+    out = out.dropna(subset=["date", "cape"]).sort_values("date").reset_index(drop=True)
+    return out
