@@ -94,6 +94,7 @@ def render(probit: dict | None = None) -> None:
     _walk_forward_section(probit)
     _nber_section()
     _revisions_section()
+    _growth_section()
     _limitations()
     _reproducibility()
 
@@ -740,8 +741,40 @@ def _revisions_section() -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _growth_section() -> None:
+    _section_header("14. Growth & nowcasting")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The recession ensemble is <i>forward-looking</i> (probability of a downturn in the "
+        "next 12 months). The Growth tab is the <i>coincident</i> complement — how fast output is "
+        "expanding right now — because the official GDP print arrives with a long lag and is heavily "
+        "revised (section 13).</p>"
+        "<p><b>Surface, don't rebuild.</b> Institutional nowcasts (the Atlanta Fed's bottom-up "
+        "GDPNow, the NY Fed's dynamic-factor model) are best-in-class and already published to FRED. "
+        "We read them rather than re-implement a Kalman-filter / bridge-equation stack. The tab "
+        "shows the official real-GDP growth rate (<code>A191RL1Q225SBEA</code>), GDPNow "
+        "(<code>GDPNOW</code>), real GDI (<code>A261RL1Q225SBEA</code>), the BEA contributions to "
+        "growth (consumption / investment / government / net exports / inventories, the "
+        "<code>…RY2Q224SBEA</code> family), and the Dallas Fed Weekly Economic Index "
+        "(<code>WEI</code>). Any series FRED rejects is skipped, never fatal.</p>"
+        "<p><b>GDP vs GDI.</b> Income- and expenditure-side measures of the same economy should "
+        "match but don't; GDI has historically led GDP at turning points, so a wide GDP−GDI gap is a "
+        "flag that the headline may be revised toward the weaker side.</p>"
+        "<p><b>Coincident growth factor (the one original model).</b> Deliberately the simplest "
+        "thing that works: take payrolls (<code>PAYEMS</code>), industrial production "
+        "(<code>INDPRO</code>), retail sales (<code>RSAFS</code>), and real consumption "
+        "(<code>PCEC96</code>) year-over-year; z-score each over the common sample; average the "
+        "available z-scores per month. The result is a unitless momentum gauge (0 = trend, positive "
+        "= above trend), not a GDP forecast — a transparent corroboration for the nowcast, not a "
+        "black-box DFM.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _limitations() -> None:
-    _section_header("14. Limitations")
+    _section_header("15. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -813,7 +846,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("15. Reproducibility")
+    _section_header("16. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
