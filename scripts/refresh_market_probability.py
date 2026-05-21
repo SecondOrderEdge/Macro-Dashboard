@@ -67,16 +67,33 @@ def _to_csv_text(raw: bytes) -> str | None:
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not open .xlsx download: {exc}")
             return None
-        for sheet in xls.sheet_names:
-            df = xls.parse(sheet)
+
+        n = len(_EXPECTED_COLUMNS)
+        # The export has LICENSE / DICTIONARY / DATA sheets; pick the data sheet
+        # (named 'data' if present, else the widest non-empty one). The downstream
+        # parser reads columns positionally, so a differently-labelled DATA sheet
+        # still works as long as the column order matches — but if the labels do
+        # match we reorder by name to be safe. The parser's validation (snapshot
+        # count, bucket sums) is the backstop against a wrong-order sheet.
+        for sheet in sorted(xls.sheet_names, key=lambda s: str(s).strip().lower() != "data"):
+            df = xls.parse(sheet).dropna(axis=1, how="all").dropna(axis=0, how="all")
+            if df.shape[0] == 0 or df.shape[1] < n:
+                continue
             lower = {str(c).strip().lower(): c for c in df.columns}
             if all(col in lower for col in _EXPECTED_COLUMNS):
                 df = df[[lower[col] for col in _EXPECTED_COLUMNS]]
-                df.columns = _EXPECTED_COLUMNS
-                return df.to_csv(index=False)
-        print(f"ERROR: no .xlsx sheet has the expected columns {_EXPECTED_COLUMNS}.")
+            else:
+                df = df.iloc[:, :n]  # assume canonical order; parser validates
+            df.columns = _EXPECTED_COLUMNS
+            print(f"Using sheet {sheet!r} ({len(df):,} rows).")
+            return df.to_csv(index=False)
+
+        print(f"ERROR: no usable data sheet in {xls.sheet_names}.")
         for sheet in xls.sheet_names:
-            cols = list(xls.parse(sheet, nrows=0).columns)
+            try:
+                cols = list(xls.parse(sheet, nrows=0).columns)
+            except Exception:  # noqa: BLE001
+                cols = ["<unreadable>"]
             print(f"  sheet {sheet!r} columns: {cols}")
         return None
 
