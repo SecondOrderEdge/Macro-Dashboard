@@ -25,6 +25,7 @@ def render(
     lame: LAME,
     panel: pd.DataFrame,
     nber: pd.Series,
+    market_prob: pd.DataFrame | None = None,
 ) -> None:
     yc = YieldCurve(panel)
     spreads = yc.spreads_history()
@@ -40,6 +41,7 @@ def render(
     composite = composite_risk(ensemble_now, lame_now, curve_now)
 
     _row_one(current, history, lame_hist, spreads)
+    _row_policy_path(market_prob)
     _row_two(history, lame_hist, spreads, nber)
     _row_three(ensemble_now, lame_now, curve_now, composite, current)
     _row_weight_sensitivity(ensemble_now, lame_now, curve_now)
@@ -163,6 +165,98 @@ def _curve_card(spreads: pd.DataFrame) -> None:
         ),
         unsafe_allow_html=True,
     )
+
+
+def _row_policy_path(market_prob: pd.DataFrame | None) -> None:
+    """Headline card: market-implied FOMC policy path (Atlanta Fed tracker)."""
+    if market_prob is None or market_prob.empty:
+        return
+
+    from src.data.market_probability import (
+        directional_probs,
+        latest_snapshot,
+        rate_path,
+    )
+
+    rp = rate_path(market_prob)
+    if rp.empty:
+        return
+    snap = latest_snapshot(market_prob)["snapshot_date"].max()
+    front = rp.index.min()
+    front_rate = float(rp.loc[front, "mean"]) / 100.0
+
+    dirs = directional_probs(market_prob)
+    dirs = dirs[dirs["snapshot_date"] == snap].sort_values("meeting_date") if not dirs.empty else dirs
+    hike = cut = float("nan")
+    if not dirs.empty:
+        hike = float(dirs.iloc[0]["prob_hike"]) if pd.notna(dirs.iloc[0]["prob_hike"]) else float("nan")
+        cut = float(dirs.iloc[0]["prob_cut"]) if pd.notna(dirs.iloc[0]["prob_cut"]) else float("nan")
+    if np.isfinite(hike) and np.isfinite(cut):
+        if hike > cut + 5:
+            lean, lean_color = "HIKES PRICED", PALETTE["risk_elevated"]
+        elif cut > hike + 5:
+            lean, lean_color = "CUTS PRICED", PALETTE["risk_low"]
+        else:
+            lean, lean_color = "ON HOLD", PALETTE["text_muted"]
+    else:
+        lean, lean_color = "—", PALETTE["text_muted"]
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:24px;">'
+        'Market-implied policy path · Atlanta Fed Market Probability Tracker</div>',
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1, 2])
+    with left:
+        hike_s = f"{hike:.0f}%" if np.isfinite(hike) else "—"
+        cut_s = f"{cut:.0f}%" if np.isfinite(cut) else "—"
+        st.markdown(
+            '<div class="panel" style="height:100%;">'
+            '<div class="panel-header"><span>Implied rate · next meeting</span>'
+            f'<span class="risk-badge" style="color:{lean_color};">{lean}</span></div>'
+            '<div class="panel-body">'
+            f'<div class="metric-big data-font" style="color:{PALETTE["accent"]};">{front_rate:.2f}<span class="metric-unit">%</span></div>'
+            f'<div class="metric-sub">mean · {front.strftime("%b %Y")} meeting</div>'
+            f'<div style="margin-top:10px;">'
+            f'<div class="submodel-row"><span class="name" style="color:{PALETTE["risk_elevated"]};">Hike</span><span class="value">{hike_s}</span></div>'
+            f'<div class="submodel-row"><span class="name" style="color:{PALETTE["risk_low"]};">Cut</span><span class="value">{cut_s}</span></div>'
+            '</div></div></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Drill into Policy Path →", key="drill_policy"):
+            st.session_state.pending_nav = "Policy Path"
+            st.rerun()
+
+    with right:
+        band = rp.dropna(subset=["p25", "p75"])
+        fig = go.Figure()
+        if not band.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=band.index, y=(band["p75"] / 100).values, mode="lines",
+                    line=dict(width=0), showlegend=False, hoverinfo="skip",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=band.index, y=(band["p25"] / 100).values, mode="lines",
+                    line=dict(width=0), fill="tonexty", fillcolor=_cape_fade(PALETTE["accent"], 0.12),
+                    name="25th–75th pct", hoverinfo="skip",
+                )
+            )
+        mean = rp.dropna(subset=["mean"])
+        fig.add_trace(
+            go.Scatter(
+                x=mean.index, y=(mean["mean"] / 100).values, mode="lines+markers",
+                line=dict(color=PALETTE["accent"], width=1.8), marker=dict(size=4, color=PALETTE["accent"]),
+                name="Mean",
+                hovertemplate="%{x|%b %Y}<br>%{y:.2f}%<extra>mean</extra>",
+            )
+        )
+        fig.update_yaxes(title="Implied rate (%)")
+        apply_template(fig, height=260, show_legend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _row_two(

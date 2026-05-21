@@ -141,6 +141,42 @@ def directional_probs(df: pd.DataFrame) -> pd.DataFrame:
     return wide[cols]
 
 
+def snapshot_dates(df: pd.DataFrame) -> list[pd.Timestamp]:
+    """Sorted unique snapshot dates present in the frame."""
+    if df.empty:
+        return []
+    return sorted(pd.to_datetime(df["snapshot_date"].unique()))
+
+
+def nearest_snapshot(df: pd.DataFrame, target: str | pd.Timestamp) -> pd.Timestamp | None:
+    """The available snapshot date closest to ``target`` (for path comparisons)."""
+    dates = snapshot_dates(df)
+    if not dates:
+        return None
+    target = pd.Timestamp(target)
+    return min(dates, key=lambda d: abs(d - target))
+
+
+def bucket_matrix(df: pd.DataFrame, snapshot: str | pd.Timestamp | None = None) -> pd.DataFrame:
+    """Probability heatmap matrix for one snapshot.
+
+    Index is the bucket label (e.g. ``"4.50-4.75"`` in %), columns are
+    ``meeting_date``, values are the bucket probability (%). Buckets are
+    ordered low to high; meetings without a given bucket are NaN.
+    """
+    b = probability_buckets(df)
+    if b.empty:
+        return pd.DataFrame()
+    snap = b["snapshot_date"].max() if snapshot is None else pd.Timestamp(snapshot)
+    sub = b[b["snapshot_date"] == snap].copy()
+    if sub.empty:
+        return pd.DataFrame()
+    sub["label"] = (sub["low_bps"] / 100).map("{:.2f}".format) + "-" + (sub["high_bps"] / 100).map("{:.2f}".format)
+    order = sub.drop_duplicates("label").sort_values("low_bps")["label"].tolist()
+    mat = sub.pivot_table(index="label", columns="meeting_date", values="probability", aggfunc="last")
+    return mat.reindex(order)
+
+
 def rate_path(df: pd.DataFrame, snapshot: str | pd.Timestamp | None = None) -> pd.DataFrame:
     """Implied rate distribution per meeting (bps), indexed by ``meeting_date``.
 

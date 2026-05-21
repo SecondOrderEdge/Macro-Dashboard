@@ -5,12 +5,15 @@ from __future__ import annotations
 import pandas as pd
 
 from src.data.market_probability import (
+    bucket_matrix,
     directional_probs,
     latest_snapshot,
     load_market_probabilities,
+    nearest_snapshot,
     parse_market_probability,
     probability_buckets,
     rate_path,
+    snapshot_dates,
 )
 
 
@@ -74,6 +77,22 @@ def test_empty_input_returns_empty_frame():
     df = parse_market_probability("date,reference_start_date,target_range,field,value\n")
     assert df.empty
     assert list(df.columns) == ["snapshot_date", "meeting_date", "target_range", "field", "value"]
+
+
+def test_nearest_snapshot_and_dates():
+    text = SAMPLE + "2023-04-05,2023-06-21,475bps - 500bps,Rate: mean,485.0\n"
+    df = parse_market_probability(text)
+    assert snapshot_dates(df) == [pd.Timestamp("2023-03-29"), pd.Timestamp("2023-04-05")]
+    assert nearest_snapshot(df, "2023-04-04") == pd.Timestamp("2023-04-05")
+    assert nearest_snapshot(df, "2023-01-01") == pd.Timestamp("2023-03-29")
+
+
+def test_bucket_matrix_shape():
+    mat = bucket_matrix(parse_market_probability(SAMPLE))
+    # Two buckets for the single meeting, ordered low to high.
+    assert list(mat.index) == ["4.50-4.75", "4.75-5.00"]
+    assert pd.Timestamp("2023-06-21") in mat.columns
+    assert mat.loc["4.75-5.00", pd.Timestamp("2023-06-21")] == 28.22
 
 
 def test_bundled_file_loads_and_is_sane():
