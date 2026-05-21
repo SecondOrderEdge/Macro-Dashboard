@@ -60,6 +60,7 @@ The Recession page averages four methodologically distinct, academically grounde
 - Recession dates are sourced live from FRED's `USREC` (NBER-based recession indicator), falling back to the bundled `data/nber_recessions.csv` if the fetch is unavailable.
 - The probit model drops any candidate feature covering less than 80% of the target window, so short-history series (e.g. JOLTS from 2000) don't shrink the estimation sample.
 - Non-monthly series are resampled to month-start (weekly→mean, daily→last, quarterly→forward-fill) before being aligned into the monthly panel the probit ensemble consumes.
+- The **Policy Path** tab reads a bundled export of the [Atlanta Fed Market Probability Tracker](https://www.atlantafed.org/cenfis/market-probability-tracker) (`data/market_probability_tracker.csv`) — the market-implied distribution of the FOMC policy rate from CME SOFR options. The source blocks automated fetching, so refresh it by replacing that CSV with a current export in the same shape (`date, reference_start_date, target_range, field, value`).
 
 ## Disclaimer
 

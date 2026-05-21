@@ -16,7 +16,7 @@ from src.models.lame import LAME
 from src.models.recession_probit import compute_probit_report
 from src.models.yield_curve import YieldCurve
 from src.ui.theme import PALETTE, inject_theme, risk_color
-from src.ui.views import curve, dashboard, methodology, pulse, recession
+from src.ui.views import curve, dashboard, methodology, pulse, rate_path, recession
 from src.ui.views import lame as lame_view
 
 
@@ -27,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-NAV_OPTIONS = ["Macro Dashboard", "Recession", "Pulse", "Labor", "Yield Curve", "Methodology"]
+NAV_OPTIONS = ["Macro Dashboard", "Recession", "Pulse", "Labor", "Yield Curve", "Policy Path", "Methodology"]
 
 inject_theme()
 
@@ -46,6 +46,19 @@ def _load_panel(cache_version: str) -> pd.DataFrame:
 def _load_nber() -> pd.Series:
     # Prefer FRED USREC (live, auto-updating); falls back to the bundled CSV.
     return load_recession_flags()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_market_prob() -> pd.DataFrame:
+    # Atlanta Fed Market Probability Tracker — a bundled CSV export (the source
+    # blocks automated fetching). Returns empty on any error so the rest of the
+    # dashboard still renders.
+    from src.data.market_probability import load_market_probabilities
+
+    try:
+        return load_market_probabilities()
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_resource(show_spinner=False)
@@ -174,7 +187,7 @@ def _nav() -> str:
     selected = option_menu(
         menu_title=None,
         options=NAV_OPTIONS,
-        icons=["grid", "graph-down", "reception-4", "people", "activity", "book"],
+        icons=["grid", "graph-down", "reception-4", "people", "activity", "signpost-split", "book"],
         orientation="horizontal",
         default_index=default_index,
         manual_select=manual_select,
@@ -217,12 +230,17 @@ def main() -> None:
         )
         return
 
+    market_prob = _load_market_prob()
+
     _header(models)
     selected = _nav()
 
     if selected == "Macro Dashboard":
         rec_current, rec_history = _recession_view(models)
-        dashboard.render(rec_current, rec_history, models["lame"], models["panel"], models["nber"])
+        dashboard.render(
+            rec_current, rec_history, models["lame"], models["panel"], models["nber"],
+            market_prob=market_prob,
+        )
     elif selected == "Recession":
         recession.render(models.get("probit"), models["nber"])
     elif selected == "Pulse":
@@ -231,13 +249,15 @@ def main() -> None:
         lame_view.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Yield Curve":
         curve.render(models["panel"], models["nber"])
+    elif selected == "Policy Path":
+        rate_path.render(market_prob, models["nber"])
     elif selected == "Methodology":
         methodology.render(models.get("probit"))
 
     st.markdown(
         f'<div style="margin-top:48px;padding-top:16px;border-top:1px solid {PALETTE["panel_border"]};'
         f'color:{PALETTE["text_tiny"]};font-size:10px;letter-spacing:0.2em;text-transform:uppercase;">'
-        "Data · FRED  ·  Recession dates · NBER  ·  This is research, not investment advice."
+        "Data · FRED  ·  Recession dates · NBER  ·  Policy path · Atlanta Fed  ·  This is research, not investment advice."
         "</div>",
         unsafe_allow_html=True,
     )
