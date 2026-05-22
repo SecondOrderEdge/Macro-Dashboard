@@ -27,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-NAV_OPTIONS = ["Macro Dashboard", "Recession", "Growth", "Credit", "Pulse", "Labor", "Yield Curve", "Policy Path", "Methodology"]
+NAV_OPTIONS = ["Macro Dashboard", "Recession", "Yield Curve", "Credit", "Labor", "Growth", "Pulse", "Policy Path", "Methodology"]
 
 inject_theme()
 
@@ -187,7 +187,7 @@ def _nav() -> str:
     selected = option_menu(
         menu_title=None,
         options=NAV_OPTIONS,
-        icons=["grid", "graph-down", "graph-up", "bank", "reception-4", "people", "activity", "signpost-split", "book"],
+        icons=["grid", "graph-down", "activity", "bank", "people", "graph-up", "reception-4", "signpost-split", "book"],
         orientation="horizontal",
         default_index=default_index,
         manual_select=manual_select,
