@@ -104,6 +104,7 @@ def _emit_all(probit: dict | None) -> None:
     _growth_section()
     _credit_section()
     _breadth_section()
+    _early_warning_section()
     _limitations()
     _reproducibility()
 
@@ -1062,8 +1063,49 @@ def _breadth_section() -> None:
     )
 
 
+def _early_warning_section() -> None:
+    _section_header("17. Early-warning ladder")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The Early Warning tab re-frames signals computed elsewhere as a single "
+        "<b>lead-time-ordered ladder</b> answering one question: <i>how close is trouble?</i> "
+        "Rungs are ordered from the earliest/slowest macro signal to the fastest financial one, so "
+        "the depth of the lit rungs is the proximity read. Slow macro trouble climbs down from the "
+        "top; fast financial trouble lights the bottom directly — one view, both kinds.</p>"
+        '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
+        "rung                         fires when                         typical lead\n"
+        "Yield-curve inversion        10y−3m ≤ 0                         ~12–18 mo\n"
+        "Bank lending standards       SLOOS net tightening > 0          ~6–12 mo\n"
+        "Housing permits              permits YoY < 0                   ~6–9 mo\n"
+        "Labor: Sahm rule             Sahm ≥ 0.5                        0–6 mo\n"
+        "Recession ensemble           12-mo probability > 30%          12-mo model\n"
+        "Labor breadth                ≥ 55% of indicators below trend  weeks–mo\n"
+        "Financial conditions (NFCI)  NFCI > 0 (tighter than avg)      weeks\n"
+        "Acute stress (VIX)           VIX ≥ 25                         days–wks"
+        "</pre>"
+        "<p><b>Proximity stage.</b> The deepest lit rung (lowest in the order) sets the headline: "
+        "lit only near the top → <i>EARLY · distant</i>; into the middle → <i>BUILDING · "
+        "approaching</i>; into the bottom → <i>ACUTE · near/here</i>.</p>"
+        "<p><b>Early warning, not a forecast.</b> Lead times are stylized averages that vary "
+        "widely; thresholds are judgmental (shown on each rung); and the sequence is <b>not</b> "
+        "deterministic — 2020 lit the bottom rungs (conditions, vol) with no curve-led runway. "
+        "Every input is already shown on another tab; this view only re-orders them by lead time, "
+        "and adds no new data or model.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
+        "Implementation: <code>src/models/early_warning.py</code>, "
+        "<code>src/ui/views/early_warning.py</code>."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _limitations() -> None:
-    _section_header("17. Limitations")
+    _section_header("18. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -1135,7 +1177,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("18. Reproducibility")
+    _section_header("19. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
