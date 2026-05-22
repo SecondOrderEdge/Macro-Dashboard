@@ -231,6 +231,28 @@ def _row_liquidity(liq: dict) -> None:
         unsafe_allow_html=True,
     )
 
+    # ON RRP drain — the point value (~$0) is uninformative without the history.
+    rrp_s = liq.get("RRPONTSYD")
+    if rrp_s is not None and not rrp_s.dropna().empty:
+        rrp_tn = (rrp_s.dropna() / 1000.0).rename("ON RRP ($tn)")  # series is $bn
+        fig = line_chart(rrp_tn, color=PALETTE["accent"], height=220, fill=True, yaxis_title="$ trillions")
+        _clamp_x(fig, rrp_tn)
+        pk_dt, pk_val = rrp_tn.idxmax(), float(rrp_tn.max())
+        if pk_val > 0.5:  # annotate the peak only if there was a real buildup
+            fig.add_annotation(
+                x=pk_dt, y=pk_val, text=f"peak ${pk_val:.1f}tn",
+                showarrow=True, arrowhead=2, ax=0, ay=-22,
+                arrowcolor=PALETTE["text_muted"], arrowwidth=1,
+                font=dict(color=PALETTE["text_muted"], size=9),
+                bgcolor="rgba(10,13,18,0.6)", borderpad=2,
+            )
+        st.markdown(
+            '<div class="label-tiny" style="margin-top:6px;">ON RRP facility · a ~$2.5tn buffer '
+            'drained to near-empty as QT and T-bill issuance pulled cash out</div>',
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
 
 # -------------------------------------------------------------------- row: CLO
 

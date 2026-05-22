@@ -101,6 +101,10 @@ def test_credit_render_smoke_populated(monkeypatch):
         "SOFR": pd.Series([5.3], index=[pd.Timestamp("2024-01-01")]),
         "WALCL": pd.Series(np.linspace(8e6, 7e6, 60), index=pd.date_range("2019-01-01", periods=60, freq="MS")),
         "M2SL": pd.Series(np.linspace(15000, 21000, 60), index=pd.date_range("2019-01-01", periods=60, freq="MS")),
+        "RRPONTSYD": pd.Series(
+            np.concatenate([np.linspace(0, 2500, 30), np.linspace(2500, 3, 30)]),
+            index=pd.date_range("2019-01-01", periods=60, freq="MS"),
+        ),  # buildup-then-drain → exercises the peak-annotation path
     }
     clo = {"BOGZ1LM263163063Q": pd.Series(np.linspace(5e5, 1e6, 40), index=pd.date_range("2014-01-01", periods=40, freq="QS"))}
     probit = {"ensemble_history": pd.Series(40 + 20 * np.sin(np.arange(200) / 6.0), index=months)}
