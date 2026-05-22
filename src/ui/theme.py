@@ -180,6 +180,49 @@ div.stButton > button:hover {
 
 /* Tables */
 .dataframe { font-family: 'JetBrains Mono', monospace !important; }
+
+/* ---- Print: clean, light, complete copy. Screen view is unaffected. ---- */
+@media print {
+    @page { margin: 1.2cm; }
+
+    /* White background + dark text, and let the whole page flow (Streamlit
+       otherwise clips to the scroll container, printing only the top). */
+    html, body, .stApp,
+    [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    section.main, .main, .block-container {
+        background: #ffffff !important;
+        color: #111111 !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+    }
+    .stApp * { color: #111111 !important; box-shadow: none !important; text-shadow: none !important; }
+    .stApp a { color: #14478f !important; }
+    .block-container { max-width: 100% !important; padding: 0 8px !important; }
+
+    /* Panels become light cards that don't split across pages. */
+    .panel {
+        background: #ffffff !important;
+        border: 1px solid #bdbdbd !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        margin-bottom: 10px !important;
+    }
+    .panel-header { border-bottom: 1px solid #dddddd !important; }
+    pre, code { background: #f2f2f2 !important; color: #111111 !important; border: 1px solid #dddddd !important; }
+    table, th, td { border-color: #cccccc !important; }
+    .label-small, .label-tiny, .metric-sub, .dashboard-subtitle, .submodel-row .name { color: #444444 !important; }
+
+    /* Drop app chrome and the dark charts (heavy ink); the written
+       methodology stands on its own. */
+    [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSidebar"],
+    [data-testid="stDecoration"], header, footer, #MainMenu,
+    .stButton, .stDownloadButton, .dashboard-header,
+    iframe[title*="option_menu"], [data-testid="stPlotlyChart"] {
+        display: none !important;
+    }
+    .print-hide { display: none !important; }
+}
 </style>
 """
 
