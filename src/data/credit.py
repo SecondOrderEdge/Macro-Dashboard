@@ -43,10 +43,10 @@ LIQUIDITY_SERIES: list[tuple[str, str]] = [
 
 # CLO supply, Fed Z.1 Financial Accounts (quarterly, ~10-week lag). The RoW
 # market-value liability is where most US CLOs sit (Cayman-domiciled). The
-# asset-side "loans held by CLOs" id is unconfirmed, so it's best-effort.
+# asset-side "loans held by CLOs" series is intentionally omitted until its
+# exact FRED id is confirmed (the earlier guess resolved to a wrong/empty series).
 CLO_SERIES: list[tuple[str, str]] = [
     ("BOGZ1LM263163063Q", "CLO liabilities outstanding"),
-    ("BOGZ1FL673069503Q", "Leveraged loans held by CLOs"),  # best-effort; skipped if FRED rejects
 ]
 
 def _cache_data(*args: Any, **kwargs: Any):

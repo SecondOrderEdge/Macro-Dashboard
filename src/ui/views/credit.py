@@ -63,6 +63,15 @@ def _clamp_x(fig, series: pd.Series):
     return fig
 
 
+def _clip(nber: pd.Series, series: pd.Series) -> pd.Series:
+    """Restrict recession shading to the plotted series' span — otherwise the
+    vrects stretch the x-axis back to the 1960 start of the NBER series."""
+    if nber is None or nber.empty or series is None or series.dropna().empty:
+        return nber
+    s = series.dropna()
+    return nber.loc[(nber.index >= s.index.min()) & (nber.index <= s.index.max())]
+
+
 def _recession_prob(probit: dict | None) -> pd.Series:
     if not probit or "error" in probit:
         return pd.Series(dtype=float)
@@ -147,7 +156,7 @@ def _row_headline(composite: pd.Series, components: pd.DataFrame, nber: pd.Serie
     with right:
         fig = line_chart(
             composite.rename("Credit-stress composite (σ)"), color=color,
-            nber=nber, zero_line=True, height=300, yaxis_title="standardized (σ)",
+            nber=_clip(nber, composite), zero_line=True, height=300, yaxis_title="standardized (σ)",
         )
         _clamp_x(fig, composite)
         st.plotly_chart(fig, use_container_width=True)
@@ -199,7 +208,7 @@ def _row_liquidity(liq: dict) -> None:
         rows.append(("Fed balance sheet · YoY", f"{wb_yoy.iloc[-1]:+.1f}%"))
     res = liq.get("WRESBAL")
     if res is not None and not res.dropna().empty:
-        rows.append(("Bank reserves · level", f"${res.dropna().iloc[-1] / 1000:.2f}tn"))
+        rows.append(("Bank reserves · level", f"${res.dropna().iloc[-1] / 1e6:.2f}tn"))  # WRESBAL is $mn
     rrp, _ = latest(liq.get("RRPONTSYD"))
     if np.isfinite(rrp):
         rows.append(("Reverse repo (ON RRP)", f"${rrp:.0f}bn"))
@@ -230,8 +239,7 @@ def _row_clo(clo: dict) -> None:
     if not clo:
         return
     liab = clo.get("BOGZ1LM263163063Q")
-    held = clo.get("BOGZ1FL673069503Q")
-    if (liab is None or liab.dropna().empty) and (held is None or held.dropna().empty):
+    if liab is None or liab.dropna().empty:
         return
 
     st.markdown(
@@ -259,9 +267,6 @@ def _row_clo(clo: dict) -> None:
         g = yoy(liab)
         if not g.empty:
             rows.append(("YoY growth", f"{g.iloc[-1]:+.1f}%"))
-        hv, _ = latest(held)
-        if np.isfinite(hv):
-            rows.append(("Loans held by CLOs", f"${hv / 1000:,.0f}bn"))
         body = "".join(
             f'<div class="submodel-row"><span class="name">{lbl}</span>'
             f'<span class="value">{val}</span></div>'
@@ -307,7 +312,7 @@ def _row_vs_risk(composite: pd.Series, prob: pd.Series, nber: pd.Series) -> None
             name="Recession prob (12m, %)", yaxis="y2",
             hovertemplate="%{x|%b %Y}<br>prob %{y:.0f}%<extra></extra>",
         ))
-        add_recession_shading(fig, nber)
+        add_recession_shading(fig, _clip(nber, composite))
         apply_template(fig, height=320)
         fig.update_yaxes(title="credit stress (σ)")
         fig.update_layout(yaxis2=dict(
