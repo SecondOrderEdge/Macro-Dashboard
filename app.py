@@ -244,7 +244,7 @@ def main() -> None:
     elif selected == "Recession":
         recession.render(models.get("probit"), models["nber"])
     elif selected == "Growth":
-        growth.render(models["nber"])
+        growth.render(models["nber"], models.get("probit"))
     elif selected == "Pulse":
         pulse.render(models["panel"], models["nber"], models["lame"])
     elif selected == "Labor":

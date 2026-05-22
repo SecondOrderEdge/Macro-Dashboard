@@ -682,7 +682,16 @@ def _revisions_section() -> None:
         pair = fetch_revision_pair(sid)
         if pair is None or pair.empty:
             continue
-        summ = revision_summary(pair["first"], pair["latest"])
+        if sid == "GDPC1":
+            # GDP levels are periodically rebased (reference-year changes), so
+            # level diffs are dominated by rebasing artifacts. Compare the
+            # annualized growth rate — the meaningful real-time revision.
+            first = ((pair["first"] / pair["first"].shift(1)) ** 4 - 1) * 100.0
+            latest = ((pair["latest"] / pair["latest"].shift(1)) ** 4 - 1) * 100.0
+            summ = revision_summary(first.dropna(), latest.dropna())
+            label, unit = "Real GDP growth", "pp, annualized"
+        else:
+            summ = revision_summary(pair["first"], pair["latest"])
         if summ["n"]:
             summaries.append((sid, label, unit, summ))
 
@@ -706,7 +715,7 @@ def _revisions_section() -> None:
     for sid, label, unit, summ in summaries:
         body.append(
             f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
-            f'<td style="padding:6px 8px;">{label}<span style="color:#5a6470;"> · {sid}</span></td>'
+            f'<td style="padding:6px 8px;">{label}<span style="color:#5a6470;"> · {sid} · {unit}</span></td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["n"]:,}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["median_revision"]:+.1f}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["mean_abs_revision"]:.1f}</td>'
@@ -767,7 +776,14 @@ def _growth_section() -> None:
         "(<code>PCEC96</code>) year-over-year; z-score each over the common sample; average the "
         "available z-scores per month. The result is a unitless momentum gauge (0 = trend, positive "
         "= above trend), not a GDP forecast — a transparent corroboration for the nowcast, not a "
-        "black-box DFM.</p>"
+        "black-box DFM. The tab validates it two ways: a scatter of the factor against the GDP "
+        "print (it should slope up), and an overlay against the 12-month recession probability "
+        "(they move inversely — weak current momentum coincides with elevated forward risk).</p>"
+        "<p><b>Revisions, measured right.</b> The real-time-vs-revised panel compares the "
+        "first-published vs latest-revised <i>annualized growth rate</i>, not the level. GDP "
+        "levels are periodically rebased (the chained-dollar reference year shifts), so level "
+        "differences are dominated by rebasing artifacts; growth-rate revisions isolate the "
+        "genuine real-time uncertainty (typically under ~1.5 pp).</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
