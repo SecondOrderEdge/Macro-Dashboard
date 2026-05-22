@@ -600,6 +600,7 @@ def _render_beveridge(panel: pd.DataFrame, nber: pd.Series) -> None:
 
     # --- Interpretation panel: where we are vs the pre-COVID baseline -----
     _render_beveridge_read(df)
+    _render_beveridge_caveat(panel)
 
 
 def _era_label(ts: pd.Timestamp) -> str:
@@ -684,6 +685,45 @@ def _render_beveridge_read(df: pd.DataFrame) -> None:
         f"unemployment had openings of <b>{baseline_openings:,.0f}k</b> "
         f"({nearest_idx.strftime('%b %Y')}).</p>"
         f'<p style="color:{verdict_color};">{verdict}</p>'
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_beveridge_caveat(panel: pd.DataFrame) -> None:
+    """Composition caveat: the post-2010s curve shift is partly driven by a
+    rising poaching-vacancy share (Cheremukhin & Restrepo-Echavarria, *The Dual
+    Beveridge Curve*, StL Fed WP 2022-021), so raw openings overstate tightness
+    facing the unemployed. The non-poaching split is a structural estimate (not
+    on FRED); we surface the JOLTS quits rate as a free directional proxy."""
+    quits_html = ""
+    if "JTSQUR" in panel.columns:
+        q = panel["JTSQUR"].dropna().resample("ME").last()
+        if not q.empty:
+            q_now = float(q.iloc[-1])
+            pctile = float((q <= q_now).mean() * 100.0)
+            chg = float(q_now - q.iloc[-13]) if len(q) >= 13 else float("nan")
+            trend = "rising" if chg > 0.1 else "falling" if chg < -0.1 else "roughly flat"
+            quits_html = (
+                "<p><b>Poaching proxy.</b> The JOLTS quits rate — a free stand-in for "
+                f"job-to-job (poaching) intensity — is <b>{q_now:.1f}%</b> "
+                f"({pctile:.0f}th pct since 2000, {trend}). Elevated quits mean a larger "
+                "share of openings target the already-employed, inflating the raw openings "
+                "count without easing the unemployed pool.</p>"
+            )
+    st.markdown(
+        f'<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;color:{PALETTE["text_primary"]};">'
+        "<p><b>Caveat — openings are composition-dependent.</b> Cheremukhin &amp; "
+        "Restrepo-Echavarria (<i>The Dual Beveridge Curve</i>, StL Fed WP 2022-021) split "
+        "vacancies into <i>poaching</i> (aimed at employed workers) and <i>non-poaching</i> "
+        "(aimed at the unemployed). The poaching share has climbed since the mid-2010s, and "
+        "much of the post-COVID outward shift above <b>disappears</b> once only non-poaching "
+        "vacancies are plotted — so the raw curve likely overstates the tightness facing the "
+        "unemployed.</p>"
+        f"{quits_html}"
+        f'<p style="color:{PALETTE["text_tiny"]};font-size:11px;">The non-poaching split is a '
+        "structural model estimate (not published on FRED); the quits rate is shown as a "
+        "directional proxy, not a reproduction of it.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
