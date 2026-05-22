@@ -95,6 +95,7 @@ def render(probit: dict | None = None) -> None:
     _nber_section()
     _revisions_section()
     _growth_section()
+    _credit_section()
     _limitations()
     _reproducibility()
 
@@ -789,8 +790,36 @@ def _growth_section() -> None:
     )
 
 
+def _credit_section() -> None:
+    _section_header("15. Credit & funding stress")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>Credit conditions lead the cycle: lenders tighten and spreads widen before output and "
+        "employment roll over. The Credit tab distils this into a standardized <b>stress "
+        "composite</b> — high-yield and investment-grade OAS, the Baa–10y spread, the Chicago Fed "
+        "conditions index (NFCI), the St. Louis stress index (STLFSI), and the SLOOS net share of "
+        "banks tightening C&amp;I standards. Each is resampled to month-start, oriented so higher = "
+        "more stress, z-scored over the common 1997+ sample, and averaged.</p>"
+        "<p><b>Overlap is intentional.</b> NFCI already embeds credit spreads, so the inputs are "
+        "not independent — the composite is a robust summary of one underlying stress factor, not "
+        "a multi-signal model. It's plotted against the 12-month recession probability, where a "
+        "positive correlation is expected (stress and forward risk rise together).</p>"
+        "<p><b>CLO supply gauge — and honest scope.</b> The CLO panel reads the Fed's quarterly "
+        "Z.1 Financial-Accounts estimate of CLO liabilities outstanding and leveraged loans held "
+        "by CLOs (added 2019; most US CLOs are offshore-domiciled). It's a coarse, ~10-week-lagged "
+        "<i>supply</i> trend — is the CLO machine expanding or contracting — <b>not</b> tranche "
+        "analytics. Timely CLO demand, AAA spreads, and speculative-grade default/distress rates "
+        "live behind paid vendors (JPM, Barclays, LCD, Moody's, S&amp;P) and are out of scope. "
+        "Funding/liquidity series (SOFR, Fed balance sheet, reserves, ON RRP, M2) sit beside the "
+        "composite as context rather than inside it, since their stress sign is regime-dependent.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _limitations() -> None:
-    _section_header("15. Limitations")
+    _section_header("16. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -862,7 +891,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("16. Reproducibility")
+    _section_header("17. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
