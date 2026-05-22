@@ -1077,7 +1077,7 @@ def _early_warning_section() -> None:
         "rung                         fires when                         typical lead\n"
         "Yield-curve inversion        10y−3m ≤ 0                         ~12–18 mo\n"
         "Bank lending standards       SLOOS net tightening > 0          ~6–12 mo\n"
-        "Housing permits              permits YoY < 0                   ~6–9 mo\n"
+        "Housing permits              permits YoY < −2%                 ~6–9 mo\n"
         "Labor: Sahm rule             Sahm ≥ 0.5                        0–6 mo\n"
         "Recession ensemble           12-mo probability > 30%          12-mo model\n"
         "Labor breadth                ≥ 55% of indicators below trend  weeks–mo\n"

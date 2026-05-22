@@ -92,12 +92,13 @@ def build_ladder(panel: pd.DataFrame, probit: dict | None = None, lame=None) -> 
         "critical" if v >= 40 else "high" if v >= 20 else "elevated" if v > 0 else "low",
         "Net % of banks tightening C&I standards; positive = tightening.", dt)
 
-    # 3) Housing rolling over (permits).
+    # 3) Housing rolling over (permits). Dead-band: a trivially-negative YoY
+    # (noise around zero) shouldn't light "rolling over"; require a real decline.
     v, dt = _yoy(panel, "PERMIT")
     add("housing", "Housing permits (YoY)", "macro", "≈ 6–9 mo",
-        v, f"{v:+.0f}%" if np.isfinite(v) else "—", np.isfinite(v) and v < 0,
-        "critical" if v <= -15 else "high" if v <= -5 else "elevated" if v < 0 else "low",
-        "Building permits YoY; rate-sensitive housing turns down early.", dt)
+        v, f"{v:+.1f}%" if np.isfinite(v) else "—", np.isfinite(v) and v < -2.0,
+        "critical" if v <= -15 else "high" if v <= -7 else "elevated" if v < -2 else "low",
+        "Building permits YoY; lit when clearly contracting (< −2%), not just flat.", dt)
 
     # 4) Labor cracking (Sahm).
     v, dt = _sahm(panel)
