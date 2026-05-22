@@ -81,6 +81,13 @@ TRANSFORM_DESCRIPTIONS: dict[str, str] = {
 
 def render(probit: dict | None = None) -> None:
     _heading()
+    _print_download(probit)
+    _emit_all(probit)
+
+
+def _emit_all(probit: dict | None) -> None:
+    """The full section sequence — shared by the on-screen render and the
+    printable HTML export, so the two can never drift."""
     _philosophy()
     _data_sources()
     _transforms()
@@ -99,6 +106,105 @@ def render(probit: dict | None = None) -> None:
     _breadth_section()
     _limitations()
     _reproducibility()
+
+
+# --------------------------------------------------- printable HTML export
+
+
+class _NoCtx:
+    """No-op context manager so st.columns can be intercepted during capture."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _build_print_html(probit: dict | None) -> str:
+    """Render the whole methodology to a self-contained, light HTML string by
+    intercepting the Streamlit output calls. Browser print of the live dark app
+    clips to the scroll container; this downloadable file prints cleanly."""
+    import datetime as _dt
+
+    captured: list[str] = []
+
+    def cap_md(body: str = "", **_k) -> None:
+        s = str(body)
+        captured.append("<hr>" if s.strip() == "---" else s)
+
+    def cap_info(msg: str = "", **_k) -> None:
+        captured.append(f'<p style="color:#555;">{msg}</p>')
+
+    def cap_df(data=None, **_k) -> None:
+        try:
+            captured.append(pd.DataFrame(data).to_html(index=False, border=0))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def cap_cols(spec, **_k):
+        n = spec if isinstance(spec, int) else len(spec)
+        return [_NoCtx() for _ in range(n)]
+
+    saved = {n: getattr(st, n) for n in ("markdown", "plotly_chart", "dataframe", "info", "columns")}
+    st.markdown, st.info, st.dataframe, st.columns = cap_md, cap_info, cap_df, cap_cols
+    st.plotly_chart = lambda *a, **k: None
+    try:
+        _emit_all(probit)
+    finally:
+        for n, fn in saved.items():
+            setattr(st, n, fn)
+
+    return _PRINT_TEMPLATE.format(today=_dt.date.today().isoformat(), body="\n".join(captured))
+
+
+def _print_download(probit: dict | None) -> None:
+    """Offer a clean, light, complete copy as a downloadable HTML file."""
+    try:
+        html = _build_print_html(probit)
+    except Exception:  # noqa: BLE001 - never let the export break the page
+        return
+    st.download_button(
+        "Download printable methodology (HTML)",
+        data=html.encode("utf-8"),
+        file_name="macro-dashboard-methodology.html",
+        mime="text/html",
+        help="A clean, light, complete copy. Open the file, then Print / Save as PDF — "
+             "the in-app dark page can clip when printed directly.",
+    )
+
+
+_PRINT_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U.S. Macro Dashboard — Methodology</title>
+<style>
+@page {{ margin: 1.4cm; }}
+* {{ color:#111 !important; background-color: transparent !important; box-shadow:none !important; text-shadow:none !important; }}
+body {{ background:#fff !important; font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;
+       line-height:1.6; max-width:820px; margin:24px auto; padding:0 18px; }}
+h1 {{ font-size:22px; margin:0 0 2px; }}
+.panel {{ border:1px solid #bdbdbd !important; border-radius:4px; margin:0 0 14px;
+         break-inside:avoid; page-break-inside:avoid; }}
+.panel-header {{ padding:8px 12px; border-bottom:1px solid #ddd !important; font-size:11px;
+                letter-spacing:.12em; text-transform:uppercase; color:#444 !important; }}
+.panel-body {{ padding:12px; font-size:13px; }}
+pre {{ background:#f3f3f3 !important; border:1px solid #ddd !important; padding:8px;
+      white-space:pre-wrap; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }}
+code {{ background:#f3f3f3 !important; padding:1px 3px; border-radius:2px;
+       font-family:ui-monospace,Menlo,Consolas,monospace; }}
+a {{ color:#14478f !important; }}
+table {{ border-collapse:collapse; width:100%; font-size:12px; margin:6px 0; }}
+th,td {{ border:1px solid #ccc !important; padding:4px 8px; text-align:left; }}
+hr {{ border:none; border-top:1px solid #ddd; margin:18px 0; }}
+.label-small,.label-tiny {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+                           color:#666 !important; display:block; margin:14px 0 6px; }}
+</style></head>
+<body>
+<h1>U.S. Macro Dashboard — Methodology</h1>
+<div style="color:#666 !important;font-size:12px;margin-bottom:18px;">Generated {today} · open this file, then Print / Save as PDF (Cmd/Ctrl + P)</div>
+{body}
+</body></html>"""
 
 
 # ---------------------------------------------------------------- top
