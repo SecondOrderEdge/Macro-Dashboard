@@ -96,6 +96,7 @@ def render(probit: dict | None = None) -> None:
     _revisions_section()
     _growth_section()
     _credit_section()
+    _breadth_section()
     _limitations()
     _reproducibility()
 
@@ -238,12 +239,25 @@ def _yield_curve_section() -> None:
         "(episodes followed by a peak) / (qualifying episodes).</p>"
         "<p><b>Lead time.</b> Average months from episode start to the following NBER peak, "
         "across episodes that hit.</p>"
+        "<p><b>Front-end funding.</b> A panel of overnight rates — SOFR, the effective fed funds "
+        "rate (EFFR), interest on reserve balances (IORB), and the 1-month T-bill — plus the "
+        "<b>SOFR−EFFR spread</b> as a money-market stress monitor: SOFR drifting above EFFR/IORB "
+        "flags collateral or reserve scarcity in repo. Display only, not a recession input.</p>"
+        "<p><b>Yield surface.</b> A heatmap of the full Treasury curve (1mo–30y) over time, so "
+        "level shifts and inversions are visible across the whole term structure at once.</p>"
+        "<p><b>Principal components.</b> PCA on monthly yield <i>changes</i> across maturities "
+        "extracts three orthogonal factors that, by construction, recover the classic shape moves: "
+        "<b>PC1 ≈ level</b> (parallel shift), <b>PC2 ≈ slope</b> (steepening/flattening), and "
+        "<b>PC3 ≈ curvature</b> (belly vs. wings). Each component is sign-oriented so the current "
+        "reading is interpretable; explained-variance shares are shown and scores are cumulated "
+        "over time.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
-        "Implementation: <code>src/models/yield_curve.py</code>."
+        "Implementation: <code>src/models/yield_curve.py</code> (spreads, inversions); "
+        "<code>src/ui/views/curve.py</code> (front-end funding, yield surface, PCA)."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -283,12 +297,32 @@ def _labor_section() -> None:
         "weeks. The breakdown displayed on the Labor page snapshots the most recent month "
         "where indicator coverage is at least 70% of peak, so the reading is not anchored "
         "on a stub month with only two series.</p>"
+        "<p><b>Sahm Rule.</b> Shown alongside the composite: the 3-month moving average of the "
+        "unemployment rate minus its trailing 12-month minimum, which fires at <b>+0.5pp</b>. We use "
+        "FRED's real-time series (<code>SAHMREALTIME</code>), so it carries no look-ahead and isn't "
+        "revised. Bands: &lt;0.2 low · 0.2–0.4 warming · 0.4–0.5 watch · ≥0.5 triggered.</p>"
+        "<p><b>Wage tracker.</b> The Atlanta Fed Wage Growth Tracker (median, 12-month MA) gauges "
+        "wage pressure; the long-run average is ~3.5%, and sustained readings above ~4.5% have "
+        "historically coincided with Fed tightening cycles.</p>"
+        "<p><b>Diffusion.</b> The share of the labor indicators with a positive (expansionary) signed "
+        "z-score — a breadth check that separates broad strength from a couple of series carrying "
+        "the composite.</p>"
+        "<p><b>Beveridge curve.</b> A scatter of JOLTS job openings against the unemployment rate, "
+        "colored by era. Today's position is read against the nearest-unemployment pre-COVID "
+        "(2010–19) month: openings materially above that baseline imply a structurally tighter / "
+        "less efficient match. <b>Composition caveat</b> — per Cheremukhin &amp; Restrepo-Echavarria "
+        "(<i>The Dual Beveridge Curve</i>, StL Fed WP 2022-021), a rising share of <i>poaching</i> "
+        "vacancies (aimed at the already-employed) inflates raw openings, so the curve overstates "
+        "the tightness facing the unemployed; we surface the JOLTS quits rate as a free directional "
+        "proxy rather than reproduce their structural split.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
-        "Implementation: <code>src/models/lame.py</code>."
+        "Implementation: <code>src/models/lame.py</code> (composite, diffusion, Beveridge); "
+        "<code>src/models/external.py</code> (Sahm Rule); "
+        "<code>src/models/conditions.py</code> (wage tracker)."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -493,12 +527,23 @@ def _composite_section() -> None:
         "<p><b>Missing inputs.</b> If a component is unavailable (e.g. the ensemble cannot "
         "be evaluated), its weight is redistributed proportionally across the available "
         "components so the composite still uses the full weight budget.</p>"
+        "<p><b>Overview-page reading aids.</b> The Macro Dashboard home carries three extras built "
+        "on top of the composite. <b>Weight sensitivity</b> lets you re-weight the three lenses with "
+        "sliders (auto-renormalised to 100%) to see how judgmental the 50/25/25 blend is. "
+        "<b>Historical analogues</b> finds the five past months closest to today by Euclidean "
+        "distance in standardised (ensemble, labor σ, 10Y−3M) space — excluding the last 24 months — "
+        "and reports what followed (peak ensemble probability and whether an NBER recession hit "
+        "within 12 months). <b>Financial conditions</b> shows NFCI, ANFCI, STLFSI, and the CFNAI "
+        "3-month activity index as <i>parallel display indicators</i> (positive NFCI = tighter); "
+        "they are deliberately <b>not</b> composite or ensemble inputs, to avoid collinearity with "
+        "the credit spreads already in the models.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
-        "Implementation: <code>src/models/composite.py</code>."
+        "Implementation: <code>src/models/composite.py</code>; overview extras in "
+        "<code>src/ui/views/dashboard.py</code> (analogues, weight sensitivity, financial conditions)."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -818,8 +863,42 @@ def _credit_section() -> None:
     )
 
 
+def _breadth_section() -> None:
+    _section_header("16. Breadth, diffusion & market-implied (Pulse)")
+    st.markdown(
+        '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
+        f'color:{PALETTE["text_primary"]};">'
+        "<p>The Pulse tab answers a question the ensemble can't on its own: <i>is the weakness "
+        "broad or narrow?</i> A few indicators rolling over is noise; a majority rolling over "
+        "together is how real downturns begin. It is descriptive, not a second forecast.</p>"
+        "<p><b>Breadth / diffusion.</b> Over the labor-indicator signed z-score panel we compute "
+        "the <b>share below trend</b> (indicators with z &lt; 0) and the <b>momentum breadth</b> "
+        "(share whose z fell over the last 3 months). Both skip months below 50% indicator "
+        "coverage so the ragged right edge doesn't whipsaw the reading, and the snapshot uses each "
+        "indicator's own freshest value. Bands: &lt;40% broad strength · 40–55 mixed · 55–70 "
+        "weakening · ≥70 broad weakness.</p>"
+        "<p><b>CFNAI diffusion.</b> FRED's CFNAI Diffusion Index summarises how broadly the ~85 "
+        "CFNAI components are contributing; sustained readings below about −0.35 have historically "
+        "accompanied recessions.</p>"
+        "<p><b>Market-implied.</b> A panel of forward expectations priced into traded assets — 5y5y "
+        "forward inflation, the 10y breakeven, the 10y real (TIPS) yield, the 10y–3m term spread, "
+        "the high-yield spread, and the St. Louis stress index. For each we show the latest level, "
+        "the 1-month change, and the trailing 5-year percentile. These are continuous and never "
+        "revised — a complement to the lagged official data, shown as context.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:4px;">'
+        "Implementation: <code>src/models/breadth.py</code>, "
+        "<code>src/models/market_implied.py</code>, <code>src/ui/views/pulse.py</code>."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _limitations() -> None:
-    _section_header("16. Limitations")
+    _section_header("17. Limitations")
     points = [
         (
             "In-sample headline · mitigated.",
@@ -891,7 +970,7 @@ def _limitations() -> None:
 
 
 def _reproducibility() -> None:
-    _section_header("17. Reproducibility")
+    _section_header("18. Reproducibility")
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
