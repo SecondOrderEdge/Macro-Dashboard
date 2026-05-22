@@ -682,7 +682,16 @@ def _revisions_section() -> None:
         pair = fetch_revision_pair(sid)
         if pair is None or pair.empty:
             continue
-        summ = revision_summary(pair["first"], pair["latest"])
+        if sid == "GDPC1":
+            # GDP levels are periodically rebased (reference-year changes), so
+            # level diffs are dominated by rebasing artifacts. Compare the
+            # annualized growth rate — the meaningful real-time revision.
+            first = ((pair["first"] / pair["first"].shift(1)) ** 4 - 1) * 100.0
+            latest = ((pair["latest"] / pair["latest"].shift(1)) ** 4 - 1) * 100.0
+            summ = revision_summary(first.dropna(), latest.dropna())
+            label, unit = "Real GDP growth", "pp, annualized"
+        else:
+            summ = revision_summary(pair["first"], pair["latest"])
         if summ["n"]:
             summaries.append((sid, label, unit, summ))
 
@@ -706,7 +715,7 @@ def _revisions_section() -> None:
     for sid, label, unit, summ in summaries:
         body.append(
             f'<tr style="border-bottom:1px solid #141a22;color:{PALETTE["text_primary"]};font-size:12px;">'
-            f'<td style="padding:6px 8px;">{label}<span style="color:#5a6470;"> · {sid}</span></td>'
+            f'<td style="padding:6px 8px;">{label}<span style="color:#5a6470;"> · {sid} · {unit}</span></td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["n"]:,}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["median_revision"]:+.1f}</td>'
             f'<td style="text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;">{summ["mean_abs_revision"]:.1f}</td>'
