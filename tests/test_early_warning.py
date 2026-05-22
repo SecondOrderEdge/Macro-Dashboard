@@ -66,6 +66,17 @@ def test_ensemble_rung_skipped_without_probit():
     assert all(r["key"] != "ensemble" for r in rungs)
 
 
+def test_housing_dead_band():
+    # A trivially-negative permits YoY (noise around zero) must NOT light the rung.
+    flat = _panel(PERMIT=np.linspace(1500.0, 1493.0, 40))   # ~ -0.5% YoY
+    h = next(r for r in build_ladder(flat, probit=None, lame=None) if r["key"] == "housing")
+    assert not h["lit"] and not h["value_str"].startswith("-0%")
+    # A clear contraction does light it.
+    drop = _panel(PERMIT=np.linspace(1600.0, 1150.0, 40))   # well below -2% YoY
+    h2 = next(r for r in build_ladder(drop, probit=None, lame=None) if r["key"] == "housing")
+    assert h2["lit"]
+
+
 def test_empty_panel_no_rungs():
     rungs = build_ladder(pd.DataFrame(), probit=None, lame=None)
     assert rungs == []
