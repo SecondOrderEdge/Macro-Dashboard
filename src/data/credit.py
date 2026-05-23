@@ -49,6 +49,16 @@ CLO_SERIES: list[tuple[str, str]] = [
     ("BOGZ1LM263163063Q", "CLO liabilities outstanding"),
 ]
 
+# Household borrowing costs — the consumer-transmission leg (vs the corporate
+# spreads in the stress composite). GS10 / FEDFUNDS are pulled too so we can
+# show the transmission spreads (mortgage over the 10y; card APR over the Fed).
+HOUSEHOLD_SERIES: list[tuple[str, str]] = [
+    ("MORTGAGE30US", "30-yr fixed mortgage"),
+    ("TERMCBCCALLNS", "Credit-card APR"),
+    ("TERMCBAUTO48NS", "New-auto loan (48-mo)"),
+]
+_HOUSEHOLD_AUX: list[str] = ["GS10", "FEDFUNDS"]
+
 def _cache_data(*args: Any, **kwargs: Any):
     try:
         import streamlit as st
@@ -115,6 +125,12 @@ def fetch_liquidity(start: str = "2000-01-01") -> dict[str, pd.Series]:
 def fetch_clo(start: str = "2000-01-01") -> dict[str, pd.Series]:
     """CLO supply series from the Z.1 Financial Accounts (id → series)."""
     return _fetch_group([s for s, _ in CLO_SERIES], start, [])
+
+
+@_cache_data(ttl=21600, show_spinner=False)
+def fetch_household(start: str = "1990-01-01") -> dict[str, pd.Series]:
+    """Household borrowing-rate series + GS10/FEDFUNDS for spreads (id → series)."""
+    return _fetch_group([s for s, _ in HOUSEHOLD_SERIES] + _HOUSEHOLD_AUX, start, [])
 
 
 def latest(series: pd.Series | None) -> tuple[float, pd.Timestamp | None]:

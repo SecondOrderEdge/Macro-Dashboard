@@ -10,6 +10,7 @@ from src.data.credit import (
     STRESS_SERIES,
     align_corr,
     credit_stress,
+    fetch_household,
     fetch_liquidity,
     latest,
     yoy,
@@ -115,3 +116,25 @@ def test_credit_render_smoke_populated(monkeypatch):
 
     nber = pd.Series(False, index=pd.date_range("2005-01-01", periods=220, freq="MS"))
     view.render(nber, probit)  # full path, must not raise
+
+
+def test_fetch_household_graceful(monkeypatch):
+    monkeypatch.setattr("src.data.fred_client.fetch_series", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    _clear(fetch_household)
+    assert fetch_household() == {}
+
+
+def test_household_row_renders():
+    from src.ui.views import credit as view
+
+    w = pd.date_range("2018-01-01", periods=300, freq="W")
+    m = pd.date_range("2018-01-01", periods=80, freq="MS")
+    hh = {
+        "MORTGAGE30US": pd.Series(np.linspace(4.0, 7.0, 300), index=w),
+        "TERMCBCCALLNS": pd.Series(np.linspace(15.0, 22.0, 80), index=m),
+        "TERMCBAUTO48NS": pd.Series(np.linspace(5.0, 8.0, 80), index=m),
+        "GS10": pd.Series(np.linspace(2.5, 4.3, 80), index=m),
+        "FEDFUNDS": pd.Series(np.linspace(0.1, 5.3, 80), index=m),
+    }
+    view._row_household(hh)   # populated path, must not raise
+    view._row_household({})   # empty path, early return, must not raise
