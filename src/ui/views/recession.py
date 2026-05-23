@@ -238,6 +238,10 @@ def _reading_text(report: dict) -> str:
         ch = ta["prob_change_pp"]
         verb = "risen" if ch > 0 else "fallen" if ch < 0 else "held"
         parts.append(f"Over the past 24 months the BIC reading has {verb} by {abs(ch):.0f}pp.")
+    parts.append(
+        "Read this as <b>risk context, not a timing call</b> — a calibrated probability and its "
+        "direction, not a prediction of the month a recession begins."
+    )
     return " ".join(parts)
 
 

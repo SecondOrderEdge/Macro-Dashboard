@@ -249,6 +249,11 @@ def _philosophy() -> None:
         "and the labor and curve lenses at 25% each. The weights are deliberate: the "
         "ensemble is the most information-rich number, but it is also the most opaque, "
         "so the simpler lenses get meaningful weight as a check.</p>"
+        "<p><b>What this is — and isn't.</b> The aim is <i>context and early warning</i>: regime "
+        "awareness, decomposable signals, and avoiding the single-indicator mistakes above. It is "
+        "<b>not</b> a claim to out-predict the <i>timing</i> of recessions — macro forecasting is "
+        "genuinely hard, and the calibrated probabilities here are most useful as risk context and "
+        "a how-close read, not as a date.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -1107,6 +1112,14 @@ def _early_warning_section() -> None:
 def _limitations() -> None:
     _section_header("18. Limitations")
     points = [
+        (
+            "Context, not a timing call.",
+            "The methodology is deliberately more sophisticated than any forecasting edge it "
+            "confers — recession timing is genuinely hard, and no public model reliably beats "
+            "consensus at it. Treat every number here as <i>risk context and early warning</i> "
+            "(regime awareness, signal decomposition, avoiding single-signal mistakes), not as a "
+            "prediction of <i>when</i> a recession starts.",
+        ),
         (
             "In-sample headline · mitigated.",
             "The default reading is fit on the full sample. The walk-forward backtest "
