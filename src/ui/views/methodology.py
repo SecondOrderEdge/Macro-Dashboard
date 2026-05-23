@@ -1024,6 +1024,12 @@ def _credit_section() -> None:
         "live behind paid vendors (JPM, Barclays, LCD, Moody's, S&amp;P) and are out of scope. "
         "Funding/liquidity series (SOFR, Fed balance sheet, reserves, ON RRP, M2) sit beside the "
         "composite as context rather than inside it, since their stress sign is regime-dependent.</p>"
+        "<p><b>Household borrowing costs.</b> Because the stress composite is all <i>corporate</i> "
+        "credit, a separate panel shows the <i>consumer</i> leg — the 30-year mortgage "
+        "(<code>MORTGAGE30US</code>), credit-card APR (<code>TERMCBCCALLNS</code>) and auto-loan "
+        "rate (<code>TERMCBAUTO48NS</code>) — with their transmission spreads (mortgage over the "
+        "10-year; card APR over fed funds). Posted/survey rates with short or mixed history, shown "
+        "as current-conditions transmission context, not as backtested recession inputs.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )

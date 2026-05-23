@@ -20,6 +20,7 @@ from src.data.credit import (
     align_corr,
     credit_stress,
     fetch_clo,
+    fetch_household,
     fetch_liquidity,
     latest,
     yoy,
@@ -98,6 +99,7 @@ def render(nber: pd.Series, probit: dict | None = None) -> None:
     _row_headline(composite, components, nber)
     _row_drivers(components)
     _row_liquidity(liq)
+    _row_household(fetch_household())
     _row_clo(clo)
     _row_vs_risk(composite, prob, nber)
     _interpretation(composite, components, prob)
@@ -252,6 +254,69 @@ def _row_liquidity(liq: dict) -> None:
             unsafe_allow_html=True,
         )
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ------------------------------------------------------------- row: household
+
+
+def _row_household(hh: dict) -> None:
+    """Consumer borrowing costs — the household-transmission leg of credit."""
+    if not hh:
+        return
+    rows = []
+
+    def _rate_row(sid: str, label: str) -> None:
+        s = hh.get(sid)
+        if s is None or s.dropna().empty:
+            return
+        s = s.dropna()
+        v = float(s.iloc[-1])
+        yr_ago = s.index[-1] - pd.DateOffset(years=1)
+        chg = v - float(s.asof(yr_ago)) if yr_ago >= s.index[0] else float("nan")
+        pct = percentile_rank(s, v)
+        pct_str = f" · {pct:.0f}th pct" if np.isfinite(pct) else ""
+        chg_str = f" · {chg:+.1f}pp 1y" if np.isfinite(chg) else ""
+        rows.append((label, f"{v:.2f}%{pct_str}{chg_str}"))
+
+    for sid, label in (("MORTGAGE30US", "30-yr fixed mortgage"),
+                       ("TERMCBCCALLNS", "Credit-card APR"),
+                       ("TERMCBAUTO48NS", "New-auto loan (48-mo)")):
+        _rate_row(sid, label)
+
+    # Transmission spreads — the household analogue of "how tight is policy".
+    mort, gs10 = hh.get("MORTGAGE30US"), hh.get("GS10")
+    if mort is not None and gs10 is not None:
+        spread = (mort.resample("MS").last() - gs10.resample("MS").last()).dropna()
+        if not spread.empty:
+            sv = float(spread.iloc[-1])
+            rows.append(("Mortgage spread over 10y", f"{sv:+.2f} pp · {percentile_rank(spread, sv):.0f}th pct"))
+    cc, ff = hh.get("TERMCBCCALLNS"), hh.get("FEDFUNDS")
+    if cc is not None and ff is not None:
+        markup = (cc.resample("MS").last() - ff.resample("MS").last()).dropna()
+        if not markup.empty:
+            rows.append(("Credit-card markup over Fed funds", f"{markup.iloc[-1]:+.1f} pp"))
+
+    if not rows:
+        return
+    st.markdown(
+        '<div class="label-small" style="margin-top:16px;">'
+        'Household borrowing costs · is the squeeze reaching consumers?</div>',
+        unsafe_allow_html=True,
+    )
+    body = "".join(
+        f'<div class="submodel-row"><span class="name">{lbl}</span>'
+        f'<span class="value">{val}</span></div>'
+        for lbl, val in rows
+    )
+    st.markdown(
+        f'<div class="panel"><div class="panel-body">{body}'
+        f'<div style="margin-top:8px;color:{PALETTE["text_tiny"]};font-size:11px;">'
+        "Posted/survey consumer rates (Freddie Mac, Fed G.19) — the household side of credit, "
+        "vs the corporate spreads in the composite. Current-conditions transmission context, not a "
+        "backtested recession input.</div>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 # -------------------------------------------------------------------- row: CLO
