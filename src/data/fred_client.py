@@ -9,12 +9,16 @@ degrades gracefully to a plain function call.
 from __future__ import annotations
 
 import os
+import time
 from typing import Iterable
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_SECONDS = (0.5, 1.5)
 
 
 def _cache_data(*args, **kwargs):
@@ -52,10 +56,19 @@ def _get_client():
 def fetch_series(series_id: str, start: str = "1959-01-01") -> pd.Series:
     """Fetch a single FRED series, cached for 6 hours."""
     fred = _get_client()
-    try:
-        s = fred.get_series(series_id, observation_start=start)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to fetch FRED series {series_id!r}: {exc}") from exc
+    last_exc: Exception | None = None
+    s = None
+    for attempt in range(_FETCH_ATTEMPTS):
+        try:
+            s = fred.get_series(series_id, observation_start=start)
+            last_exc = None
+            break
+        except Exception as exc:  # noqa: BLE001 - retry any FRED-side failure
+            last_exc = exc
+            if attempt < _FETCH_ATTEMPTS - 1:
+                time.sleep(_FETCH_BACKOFF_SECONDS[attempt])
+    if last_exc is not None:
+        raise RuntimeError(f"Failed to fetch FRED series {series_id!r}: {last_exc}") from last_exc
     if s is None or len(s) == 0:
         raise RuntimeError(f"FRED series {series_id!r} returned no observations.")
     s = pd.Series(s).copy()
