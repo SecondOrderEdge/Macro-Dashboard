@@ -98,6 +98,30 @@ TARGET_SERIES: dict[str, dict] = {
     "RECPROUSM156N": {"name": "Chauvet-Piger Recession Prob", "category": "Benchmark"},
 }
 
+# Approximate publication lag (months) between a series' FRED reference date and
+# the month in which the value is first public. Used by the walk-forward backtest
+# so a prediction dated month ``t`` only sees data published by the end of ``t``.
+# FRED dates quarterly series at the first month of the quarter, so the advance
+# GDP estimate (~4 weeks after quarter end) is ~4 months after its reference date.
+# Market series (Treasury yields, fed funds, Baa spread) are monthly averages of
+# daily data known by month-end, so they lag 0. Anything not listed defaults to 0.
+PUBLICATION_LAG_MONTHS: dict[str, int] = {
+    # National activity / industrial
+    "CFNAI": 1, "CFNAIMA3": 1, "USSLIND": 1, "GDPC1": 4,
+    "INDPRO": 1, "BSCICP02USM460S": 1, "TCU": 1, "DGORDER": 1, "IPMAN": 1,
+    # Consumer
+    "UMCSENT": 1, "PCECC96": 4, "DSPIC96": 1, "RSAFS": 1,
+    # Labor
+    "UNRATE": 1, "ICSA": 1, "PAYEMS": 1, "JTSJOL": 2,
+    # Inflation
+    "CPIAUCSL": 1, "PCEPILFE": 1, "PCEPI": 1, "CPILFESL": 1, "PPIACO": 1,
+    # Housing
+    "HOUST": 1, "PERMIT": 1, "HSN1F": 1, "CSUSHPISA": 2,
+    # Banking (quarterly delinquency ~7 weeks after quarter end; SLOOS in-quarter)
+    "BUSLOANS": 1, "DRALACBS": 5, "DRTSCILM": 1,
+}
+
+
 # Expected coefficient signs for economic validity (enforced during selection).
 SIGN_CONSTRAINTS = {
     "SPREAD": "negative",       # lower spread = higher recession risk
@@ -176,9 +200,30 @@ def fetch_probit_panel(start: str = OBS_START) -> pd.DataFrame:
 # ------------------------------------------------------------ feature engineering
 
 
-def engineer_features(raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str], dict[str, str]]:
-    """Apply transforms and build the feature matrix + target column."""
-    data = raw.copy()
+def apply_publication_lags(raw: pd.DataFrame, lags: dict[str, int] | None = None) -> pd.DataFrame:
+    """Shift each raw series forward by its publication lag (months).
+
+    After shifting, row ``t`` holds only values that were public by the end of
+    month ``t``. The target (USREC) and the Chauvet-Piger benchmark are untouched.
+    """
+    lags = PUBLICATION_LAG_MONTHS if lags is None else lags
+    out = raw.copy()
+    for sid, lag in lags.items():
+        if lag and sid in out.columns:
+            out[sid] = out[sid].shift(int(lag))
+    return out
+
+
+def engineer_features(
+    raw: pd.DataFrame, *, publication_lags: bool = False,
+) -> tuple[pd.DataFrame, list[str], dict[str, str]]:
+    """Apply transforms and build the feature matrix + target column.
+
+    With ``publication_lags=True`` each raw series is first shifted by
+    :data:`PUBLICATION_LAG_MONTHS` (derived features such as ``UNRATE_CHG3``
+    inherit the lag). The target is always built from the unshifted USREC.
+    """
+    data = apply_publication_lags(raw) if publication_lags else raw.copy()
 
     # Derived: long-history spread (GS10-TB3MS reaches back to 1959 monthly) and
     # a Sahm-style 3-month unemployment momentum term.
@@ -267,6 +312,20 @@ def _fit_probit(y: pd.Series, X: pd.DataFrame, maxiter: int = 300):
     )
 
 
+def complete_rows(data: pd.DataFrame, feats: list[str], cutoff: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Training rows complete for *this model's* features and the target.
+
+    Each model is fit on its own complete-case sample rather than the
+    intersection of every candidate feature, so short-history series used by
+    other models don't truncate (e.g.) the spread-only NY Fed model.
+    """
+    cols = list(dict.fromkeys(list(feats) + ["TARGET"]))
+    rows = data[cols].dropna()
+    if cutoff is not None:
+        rows = rows.loc[rows.index <= cutoff]
+    return rows
+
+
 def forward_stepwise_bic(
     y: pd.Series, X_all: pd.DataFrame, feature_names: list[str],
     max_features: int = MAX_FEATURES_BIC, seed: list[str] | None = None,
@@ -328,13 +387,15 @@ def _latest_values(data: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, pd
 # ------------------------------------------------------------------- main report
 
 
-def _prepare(raw: pd.DataFrame) -> dict:
+def _prepare(raw: pd.DataFrame, *, publication_lags: bool = False) -> dict:
     """Engineer features, filter coverage, and run full-sample BIC selection.
 
     Shared by :func:`build_report` (current estimate) and :func:`walk_forward`
-    (out-of-sample) so both see an identical feature universe and selection.
+    (out-of-sample). ``model_df`` (rows complete for *every* available feature)
+    is only the common sample BIC selection compares candidates on; the models
+    themselves are fit on :func:`complete_rows` for their own features.
     """
-    data, feature_cols, feat_to_cat = engineer_features(raw)
+    data, feature_cols, feat_to_cat = engineer_features(raw, publication_lags=publication_lags)
     if "TARGET" not in data.columns:
         raise RuntimeError("USREC target unavailable — cannot fit the probit ensemble.")
 
@@ -381,19 +442,25 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     prep = _prepare(raw)
     data, feat_to_cat = prep["data"], prep["feat_to_cat"]
     available, bic_selected = prep["available"], prep["bic_selected"]
-    model_df, predict_df = prep["model_df"], prep["predict_df"]
-    y, spread_feat = prep["y"], prep["spread_feat"]
+    predict_df = prep["predict_df"]
+    spread_feat = prep["spread_feat"]
 
     # --- fit the re-estimated probit models -----------------------------------
+    # Each model is fit on rows complete for its own features (not the
+    # intersection of all candidates), so e.g. NY Fed keeps the pre-1976 cycles.
     models: dict[str, dict] = {}
-    res_ny = _fit_probit(y, model_df[[spread_feat]], maxiter=500)
+    ny_rows = complete_rows(data, [spread_feat])
+    res_ny = _fit_probit(ny_rows["TARGET"].astype(float), ny_rows[[spread_feat]], maxiter=500)
     models["NY Fed"] = {"res": res_ny, "features": [spread_feat]}
 
     wright_feats = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
-    res_wr = _fit_probit(y, model_df[wright_feats], maxiter=500)
+    wr_rows = complete_rows(data, wright_feats)
+    res_wr = _fit_probit(wr_rows["TARGET"].astype(float), wr_rows[wright_feats], maxiter=500)
     models["Wright"] = {"res": res_wr, "features": wright_feats}
 
-    res_bic = _fit_probit(y, model_df[bic_selected], maxiter=500)
+    bic_df = complete_rows(data, bic_selected)
+    y_bic = bic_df["TARGET"].astype(float)
+    res_bic = _fit_probit(y_bic, bic_df[bic_selected], maxiter=500)
     models["BIC-selected"] = {"res": res_bic, "features": bic_selected}
 
     # --- current probabilities ------------------------------------------------
@@ -446,12 +513,12 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
     # --- bootstrap 90% CI on the BIC model ------------------------------------
     rng = np.random.default_rng(rng_seed)
     boot = []
-    n = len(model_df)
-    Xb = model_df[bic_selected]
+    n = len(bic_df)
+    Xb = bic_df[bic_selected]
     for _ in range(max(0, bootstrap)):
         idx = rng.integers(0, n, size=n)
         try:
-            rb = _fit_probit(y.iloc[idx], Xb.iloc[idx], maxiter=200)
+            rb = _fit_probit(y_bic.iloc[idx], Xb.iloc[idx], maxiter=200)
             boot.append(_prob(rb.params.values, latest_vals))
         except Exception:  # noqa: BLE001
             pass
@@ -461,13 +528,13 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         ci_lower = ci_upper = float("nan")
 
     # --- watchlist trigger levels + ±1SD sensitivity --------------------------
-    sensitivity = _watchlist(model_df, bic_selected, latest_vals, res_bic, feat_to_cat)
+    sensitivity = _watchlist(bic_df, bic_selected, latest_vals, res_bic, feat_to_cat)
 
     # --- adverse scenario (shock every feature 1SD in its risk direction) -----
     x_adv = latest_vals.copy()
     for j, feat in enumerate(bic_selected):
         coef = res_bic.params.iloc[j + 1]
-        sd = model_df[feat].std()
+        sd = bic_df[feat].std()
         x_adv[j] += sd if coef > 0 else -sd
     adverse_prob = _prob(res_bic.params.values, x_adv)
 
@@ -488,7 +555,7 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         feat: {
             "value": round(float(latest_vals[j]), 4),
             "category": feat_to_cat.get(feat, ""),
-            "percentile": round(float((model_df[feat] < latest_vals[j]).mean() * 100), 0),
+            "percentile": round(float((bic_df[feat] < latest_vals[j]).mean() * 100), 0),
         }
         for j, feat in enumerate(bic_selected)
     }
@@ -519,9 +586,9 @@ def build_report(raw: pd.DataFrame, *, bootstrap: int = BOOTSTRAP_ITERS, rng_see
         "adverse_scenario_probability": round(adverse_prob, 2),
         "trend_attribution": trend_attribution,
         "model_metadata": {
-            "training_observations": len(model_df),
-            "training_start": model_df.index.min().strftime("%Y-%m"),
-            "training_end": model_df.index.max().strftime("%Y-%m"),
+            "training_observations": len(bic_df),
+            "training_start": bic_df.index.min().strftime("%Y-%m"),
+            "training_end": bic_df.index.max().strftime("%Y-%m"),
             "pseudo_r2": round(float(res_bic.prsquared), 4),
             "target_definition": TARGET_DEFINITION,
             "feature_count": len(available),
@@ -686,8 +753,10 @@ def walk_forward(
     is a coincident benchmark and is excluded. At each refit date the re-estimated
     models are fit using only observations whose 12-month-ahead label was already
     known by that date (t <= refit_ts - 12 months), then used to predict every
-    month until the next refit. No future data — features or labels — enters any
-    prediction.
+    month until the next refit. Each model is fit on rows complete for its own
+    features and joins the ensemble once it has ``MIN_WINDOW`` such rows.
+    Features are shifted by :data:`PUBLICATION_LAG_MONTHS`, so the prediction
+    dated ``t`` uses only data published by the end of month ``t``.
 
     The BIC *feature set* is selected once on the full sample (parameters are
     re-estimated out-of-sample, selection is not) — the same in-sample-selection
@@ -697,10 +766,9 @@ def walk_forward(
     if sm is None or _stats is None:
         raise RuntimeError("statsmodels and scipy are required for walk-forward.")
 
-    prep = _prepare(raw)
+    prep = _prepare(raw, publication_lags=True)
     data, available, bic_selected = prep["data"], prep["available"], prep["bic_selected"]
     spread_feat = prep["spread_feat"]
-    model_df = prep["model_df"]
 
     wright_feats = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
     specs = {"NY Fed": [spread_feat], "Wright": wright_feats, "BIC-selected": bic_selected}
@@ -711,7 +779,7 @@ def walk_forward(
     )
 
     start_ts = pd.Timestamp(oos_start)
-    end_ts = model_df.index.max()
+    end_ts = data["TARGET"].last_valid_index()
     refit_dates = pd.date_range(start=start_ts, end=end_ts, freq=f"{refit_every_months}MS")
     if len(refit_dates) == 0:
         return pd.Series(dtype=float, name="ensemble_oos")
@@ -719,23 +787,24 @@ def walk_forward(
     monthly: dict[pd.Timestamp, float] = {}
     for i, refit_ts in enumerate(refit_dates):
         next_ts = refit_dates[i + 1] if i + 1 < len(refit_dates) else end_ts + pd.DateOffset(months=1)
-        # The label for observation t (recession at t+12) is not observable until
-        # t+12. To avoid look-ahead, train only on rows whose label was known by
+        # The label for observation t (any recession in t+1..t+12) is not
+        # observable until t+12. To avoid look-ahead, train only on rows whose label was known by
         # the refit date: t <= refit_ts - 12 months.
         label_cutoff = refit_ts - pd.DateOffset(months=12)
-        train = model_df.loc[model_df.index <= label_cutoff]
-        if len(train) < MIN_WINDOW:
-            continue
-        y_train = train["TARGET"].astype(float)
 
         fitted: dict[str, np.ndarray] = {}
         for name, feats in specs.items():
             if not feats:
                 continue
+            train = complete_rows(data, feats, cutoff=label_cutoff)
+            if len(train) < MIN_WINDOW:
+                continue
             try:
-                fitted[name] = _fit_probit(y_train, train[feats], maxiter=300).params.values
+                fitted[name] = _fit_probit(train["TARGET"].astype(float), train[feats], maxiter=300).params.values
             except Exception:  # noqa: BLE001
                 pass
+        if not fitted:
+            continue
 
         window = data.loc[(data.index >= refit_ts) & (data.index < next_ts)]
         for ts in window.index:
@@ -755,19 +824,51 @@ def walk_forward(
     return pd.Series(monthly, name="ensemble_oos").sort_index()
 
 
-def calibration_stats(pred_pct: pd.Series, target: pd.Series) -> dict:
-    """Brier / AUC / reliability + base-rate skill for a probability series."""
+def expanding_base_rate(target: pd.Series, index: pd.Index, label_lag_months: int = 12) -> pd.Series:
+    """Base rate a forecaster could know at each date in ``index``.
+
+    For month ``t`` it is the mean of every label observed by then, i.e. labels
+    for months ``<= t - label_lag_months`` (the window label for ``s`` needs
+    USREC through ``s + 12``). Uses the whole ``target`` history, including
+    months before the evaluation window. NaN where no label is known yet.
+    """
+    y = target.astype(float).dropna().sort_index()
+    known = y.expanding().mean()
+    known.index = known.index + pd.DateOffset(months=label_lag_months)
+    idx = pd.DatetimeIndex(index)
+    return known.reindex(known.index.union(idx)).ffill().reindex(idx)
+
+
+def calibration_stats(pred_pct: pd.Series, target: pd.Series, *, label_lag_months: int = 12) -> dict:
+    """Brier / AUC / reliability + base-rate skill for a probability series.
+
+    Two no-skill benchmarks are reported: the *full-sample* base rate (mean of
+    the outcome over the evaluation window, only knowable in hindsight) and the
+    *expanding* base rate (:func:`expanding_base_rate`, known at each date).
+    """
     pred = (pred_pct / 100.0).rename("p")
     y = target.astype(float).rename("y")
     df = pd.concat([pred, y], axis=1, sort=True).dropna()
     if df.empty:
         return {"brier": float("nan"), "auc": float("nan"), "reliability_curve": pd.DataFrame(),
-                "baseline_brier": float("nan"), "skill_score": float("nan"), "n_obs": 0}
+                "baseline_brier": float("nan"), "skill_score": float("nan"),
+                "baseline_brier_expanding": float("nan"), "skill_score_expanding": float("nan"),
+                "n_obs": 0, "n_obs_expanding": 0, "start": None, "end": None}
 
     brier = float(((df["p"] - df["y"]) ** 2).mean())
     base_rate = float(df["y"].mean())
     baseline = float(((base_rate - df["y"]) ** 2).mean())
     skill = (1 - brier / baseline) * 100 if baseline > 0 else float("nan")
+
+    # Expanding (known-at-the-time) base rate, scored on the rows where one exists.
+    br = expanding_base_rate(target, df.index, label_lag_months)
+    ex = df.assign(br=br.values).dropna(subset=["br"])
+    if ex.empty:
+        baseline_exp = skill_exp = float("nan")
+    else:
+        brier_ex = float(((ex["p"] - ex["y"]) ** 2).mean())
+        baseline_exp = float(((ex["br"] - ex["y"]) ** 2).mean())
+        skill_exp = (1 - brier_ex / baseline_exp) * 100 if baseline_exp > 0 else float("nan")
 
     try:
         from sklearn.metrics import roc_auc_score
@@ -786,6 +887,9 @@ def calibration_stats(pred_pct: pd.Series, target: pd.Series) -> dict:
     return {
         "brier": brier, "auc": auc, "reliability_curve": rel,
         "baseline_brier": baseline, "skill_score": skill, "n_obs": int(len(df)),
+        "baseline_brier_expanding": baseline_exp, "skill_score_expanding": skill_exp,
+        "n_obs_expanding": int(len(ex)),
+        "start": df.index.min(), "end": df.index.max(),
     }
 
 
