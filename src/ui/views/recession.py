@@ -543,11 +543,9 @@ def _render_scenario(report: dict) -> None:
         "(no refit). Every non-moved driver is held at its current value, so each reading is a "
         "<i>ceteris paribus</i> what-if, not a forecast of joint moves.</p>"
         "<p>Each slider is tagged with the direction it pushes risk, read from its fitted "
-        "coefficient. Some <i>level</i> indicators — the unemployment rate is the classic case — "
-        "<b>lower</b> modeled risk as they rise: the target is forward-looking, and recessions are "
-        "preceded by low, late-cycle unemployment, while a high level means the downturn is "
-        "already underway. It's the <i>rate of change</i> (e.g. the 3-month change in "
-        "unemployment), not the level, that flags a coming recession.</p>"
+        "coefficient. Every driver's sign is restricted in advance to its economically expected "
+        "direction, and only stationary inputs (the term spread, growth rates, changes, credit "
+        "spreads, survey indices) are candidates, so no rate or inflation <i>level</i> appears here.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )

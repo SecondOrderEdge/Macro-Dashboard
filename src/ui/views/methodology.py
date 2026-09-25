@@ -449,7 +449,7 @@ def _labor_section() -> None:
 _PROBIT_MODELS = [
     ("NY Fed", "10y-3m term spread", "Re-estimated probit", "Estrella & Mishkin (1998)"),
     ("Wright", "Spread + fed funds rate", "Re-estimated probit", "Wright (2006)"),
-    ("BIC-selected", "Data-driven, sign-constrained", "Forward-stepwise BIC", "Berge (2014)"),
+    ("BIC-selected", "Spread + ≤3 stationary indicators, sign-restricted", "Forward-stepwise BIC (cap 4)", "Estrella & Mishkin (1998); Liu & Moench (2016)"),
     ("Estrella-Mishkin", "10y-3m term spread", "Closed form, frozen 2006 params", "Estrella & Trubin (2006)"),
 ]
 _PROBIT_BENCHMARK = ("Chauvet-Piger", "Markov-switching (coincident)", "FRED RECPROUSM156N — nowcast panel, not in ensemble", "Chauvet & Piger")
@@ -512,20 +512,39 @@ def _recession_section(probit: dict | None) -> None:
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
         "BIC = k·ln(n) − 2·ℓ̂    (k = #params incl. intercept, n = months, ℓ̂ = max log-likelihood)"
         "</pre>"
-        "<p>Starting from the intercept-only model, at each step every remaining candidate is fit; "
-        "it is kept only if it (a) does not induce <b>quasi-complete separation</b> (rejected when "
-        "pseudo-R² &gt; 0.99, any |coefficient| &gt; 100, or any standard error is NaN) and "
-        "(b) preserves the <b>economically correct sign</b> on constrained features (SPREAD ≤ 0, "
-        "UNRATE_CHG3 ≥ 0, U. Michigan sentiment ≤ 0, C&amp;I loan growth ≤ 0). The candidate with "
-        "the lowest BIC is added; selection stops when no candidate lowers BIC, or at "
-        "<b>9 features</b>.</p>"
+        "<p>The rule was fixed before any result was computed:</p>"
+        "<ul>"
+        "<li><b>Term spread forced in.</b> SPREAD always enters first (the benchmark predictor at "
+        "this horizon: Estrella &amp; Mishkin 1998; Liu &amp; Moench 2016), so the BIC model is "
+        "\"spread plus a few incremental indicators\".</li>"
+        "<li><b>Stationary candidates only</b>, each with an a-priori sign: growth rates of "
+        "activity, orders, income, sales, payrolls, JOLTS openings, housing, house prices and C&amp;I "
+        "loans; CFNAI; OECD manufacturing confidence; U. Michigan sentiment (all ≤ 0), and the "
+        "3-month unemployment change, initial-claims growth, the Baa–10Y credit spread and SLOOS "
+        "tightening (all ≥ 0). Rate levels (fed funds, 10-year, 3-month), the unemployment, "
+        "capacity-utilisation and delinquency levels, inflation rates and near-duplicate term "
+        "spreads are <b>not</b> candidates. Non-stationary levels make binary-choice fits unreliable, "
+        "and Wright already carries the fed funds level.</li>"
+        "<li><b>Signs enforced on every selected feature</b>, plus the <b>quasi-complete "
+        "separation</b> guard (rejected when pseudo-R² &gt; 0.99, any |coefficient| &gt; 100, or any "
+        "standard error is NaN).</li>"
+        "<li><b>Hard cap of 4 features</b> (spread + up to 3), reflecting the finding that "
+        "out-of-sample fit deteriorates as variables are added (Estrella &amp; Mishkin 1998). "
+        "Selection stops earlier when no candidate lowers BIC. If none does, the model is the spread "
+        "alone.</li>"
+        "<li>A candidate must be observed on at least 80% of the labelled training months. "
+        "Candidates are compared on the months complete for all eligible candidates, then the chosen "
+        "model is re-fit on the months complete for its own features.</li>"
+        "<li>The live model selects on the full labelled sample. The walk-forward backtest "
+        "(section 11) <b>reselects inside every refit</b>, using only that fold's training data.</li>"
+        "</ul>"
 
         "<p><b>5 · The four models.</b> Three are re-estimated on our data (on the start-dated "
         "target); one is frozen:</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
         "NY Fed            Φ(β0 + β·SPREAD)                   re-estimated\n"
         "Wright (2006)     Φ(β0 + β1·SPREAD + β2·FEDFUNDS)    re-estimated\n"
-        "BIC-selected      Φ(β0 + β′x_BIC)                    re-estimated, sign-constrained\n"
+        "BIC-selected      Φ(β0 + β′x_BIC), ≤ 4 features      re-estimated, sign-restricted\n"
         "Estrella–Mishkin  Φ(−0.6045 − 0.7374·SPREAD)         frozen (Estrella–Trubin 2006)"
         "</pre>"
         "<p>Estrella–Mishkin keeps its published constants, which were estimated for a different "
@@ -838,10 +857,10 @@ def _walk_forward_section(probit: dict | None) -> None:
         "panel below. Features are shifted to their approximate publication dates (most "
         "monthly macro series one month, quarterly GDP four months after the quarter's first "
         "month; market rates none), so the prediction dated month <code>t</code> uses only data "
-        "public by the end of <code>t</code>. The BIC <i>feature set</i> is selected once on the "
-        "full sample (coefficients are re-estimated out-of-sample, selection is not) — "
-        "reselecting features at every refit would multiply runtime without changing the "
-        "headline conclusion.</p>"
+        "public by the end of <code>t</code>. The BIC member's <i>features</i> are reselected at "
+        "every refit using only that fold's training rows (the same pre-registered rule as the "
+        "live model: spread forced, stationary sign-restricted candidates, at most 4 features), "
+        "so neither selection nor coefficients see labels that were not yet observed.</p>"
         "<p><b>Benchmarks.</b> Skill is reported against both the full-sample base rate "
         "(hindsight) and the expanding base rate a forecaster could have known at each date "
         "(start-dated labels for months up to 12 months earlier, in-recession months "
@@ -1211,11 +1230,13 @@ def _limitations() -> None:
             "very few events.",
         ),
         (
-            "Feature selection · in-sample.",
-            "BIC forward selection runs once on the full sample; the walk-forward backtest "
-            "re-estimates coefficients out-of-sample but holds that feature set fixed. Features "
-            "covering less than 80% of the target window (e.g. JOLTS from 2000) are dropped so "
-            "short-history series don't shrink the estimation sample.",
+            "Feature selection · constrained, reselected out-of-sample.",
+            "The BIC model is the term spread plus at most three stationary, sign-restricted "
+            "indicators. The live model selects on the full sample, and the walk-forward backtest "
+            "reselects at every refit using only that fold's data. The selected set changes "
+            "across folds, so read the current feature list as one draw rather than a stable "
+            "structure. Candidates covering less than 80% of the labelled months (e.g. JOLTS from "
+            "2000) are ineligible.",
         ),
         (
             "Bootstrap CI · approximate.",

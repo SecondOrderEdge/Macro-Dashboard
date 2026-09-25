@@ -227,7 +227,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v16-recession-start-target")
+            models = _build_models("v17-bic-constrained")
     except Exception as exc:
         _header(None)
         _nav()

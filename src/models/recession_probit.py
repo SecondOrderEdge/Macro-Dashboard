@@ -9,7 +9,7 @@ recession (peak month through trough) are dropped from training and scoring.
 
 1. **NY Fed**         — probit on the 10y-3m term spread alone (Estrella-Mishkin 1998).
 2. **Wright**         — probit on spread + fed funds rate (Wright 2006).
-3. **BIC-selected**   — forward-stepwise probit, sign-constrained, <=9 features.
+3. **BIC-selected**   — term spread + <=3 stationary, sign-restricted indicators (forward-stepwise BIC, cap 4).
 4. **Estrella-Mishkin** — closed form with frozen 2006 parameters.
 
 **Chauvet-Piger** (FRED's smoothed Markov-switching series RECPROUSM156N) and
@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover
 
 OBS_START = "1967-01-01"
 MIN_WINDOW = 120
-MAX_FEATURES_BIC = 9
+MAX_FEATURES_BIC = 4          # SPREAD + at most 3 pool features (fixed a priori)
 THRESHOLD_WARNING = 30
 THRESHOLD_ELEVATED = 50
 # "start"  = an NBER peak falls in t+1..t+12 (a new recession starts within 12
@@ -139,6 +139,22 @@ SIGN_CONSTRAINTS = {
     "UMCSENT": "negative",      # lower sentiment = higher recession risk
     "BUSLOANS_YOY": "negative", # credit contraction = higher recession risk
 }
+
+# BIC member: stationary candidate pool, each with an a-priori sign that is
+# enforced on every selected feature. SPREAD is always forced in first. Rate
+# levels (FEDFUNDS, GS10, TB3MS), UNRATE/TCU/DRALACBS levels, inflation rates,
+# near-duplicate spreads (T10Y2Y, T10Y3M), USSLIND (discontinued) and PCECC96
+# (quarterly, mostly NaN after resampling) are deliberately not candidates.
+BIC_FORCED_FEATURE = "SPREAD"
+BIC_POOL_SIGNS: dict[str, str] = {
+    **{f: "negative" for f in [
+        "GDPC1_YOY", "INDPRO_YOY", "IPMAN_YOY", "DGORDER_YOY", "DSPIC96_YOY", "RSAFS_YOY",
+        "PAYEMS_YOY", "JTSJOL_YOY", "HOUST_YOY", "PERMIT_YOY", "HSN1F_YOY", "CSUSHPISA_YOY",
+        "BUSLOANS_YOY", "CFNAI", "CFNAIMA3", "BSCICP02USM460S", "UMCSENT"]},
+    **{f: "positive" for f in ["UNRATE_CHG3", "ICSA_YOY", "BAA10YM", "DRTSCILM"]},
+}
+BIC_SIGNS: dict[str, str] = {BIC_FORCED_FEATURE: "negative", **BIC_POOL_SIGNS}
+BIC_MIN_COVERAGE = 0.80
 
 # Frozen Estrella-Mishkin (Estrella & Trubin 2006) closed-form parameters.
 _EM_CONST = -0.6045
@@ -423,12 +439,13 @@ def has_separation(res) -> bool:
     return False
 
 
-def check_sign_constraints(res, selected_feats: Iterable[str]) -> bool:
+def check_sign_constraints(res, selected_feats: Iterable[str], signs: dict[str, str] | None = None) -> bool:
     """True if every constrained feature has the economically correct sign."""
+    signs = SIGN_CONSTRAINTS if signs is None else signs
     for feat in selected_feats:
-        if feat in SIGN_CONSTRAINTS and feat in res.params.index:
+        if feat in signs and feat in res.params.index:
             coef = res.params[feat]
-            expected = SIGN_CONSTRAINTS[feat]
+            expected = signs[feat]
             if expected == "negative" and coef > 0:
                 return False
             if expected == "positive" and coef < 0:
@@ -459,8 +476,13 @@ def complete_rows(data: pd.DataFrame, feats: list[str], cutoff: pd.Timestamp | N
 def forward_stepwise_bic(
     y: pd.Series, X_all: pd.DataFrame, feature_names: list[str],
     max_features: int = MAX_FEATURES_BIC, seed: list[str] | None = None,
+    signs: dict[str, str] | None = None,
 ) -> list[str]:
-    """Forward-stepwise BIC selection with separation + sign-constraint guards."""
+    """Forward-stepwise BIC selection with separation + sign-constraint guards.
+
+    ``max_features`` caps the total (seed included). ``signs`` overrides the
+    default :data:`SIGN_CONSTRAINTS` map of required coefficient signs.
+    """
     if sm is None:
         raise RuntimeError("statsmodels is required for probit fitting.")
     selected = list(seed) if seed else []
@@ -478,7 +500,7 @@ def forward_stepwise_bic(
         for feat in remaining:
             try:
                 res = _fit_probit(y, X_all[selected + [feat]])
-                if not has_separation(res) and check_sign_constraints(res, selected + [feat]):
+                if not has_separation(res) and check_sign_constraints(res, selected + [feat], signs):
                     candidates.append((feat, res.bic))
             except Exception:  # noqa: BLE001 - singular/non-converged fits are skipped
                 pass
@@ -492,6 +514,42 @@ def forward_stepwise_bic(
         best_bic = best_candidate_bic
 
     return selected
+
+
+def select_bic_features(data: pd.DataFrame, cutoff: pd.Timestamp | None = None) -> list[str]:
+    """Pre-registered BIC-member selection on the labelled rows up to ``cutoff``.
+
+    SPREAD is forced first; up to ``MAX_FEATURES_BIC - 1`` features are added
+    from the stationary, sign-restricted :data:`BIC_POOL_SIGNS` pool by
+    forward-stepwise BIC (signs enforced on every selected feature, separation
+    guard). A pool feature is eligible if it is observed on at least 80% of the
+    labelled training rows; candidates are compared on the rows complete for
+    SPREAD + every eligible feature. With fewer than ``MIN_WINDOW`` such rows,
+    or if nothing lowers BIC, the member is SPREAD alone. Used on the full
+    sample for the live model and inside every walk-forward fold.
+    """
+    forced = BIC_FORCED_FEATURE
+    if forced not in data.columns or "TARGET" not in data.columns:
+        return [forced] if forced in data.columns else []
+    labelled = data.loc[data["TARGET"].notna()]
+    if cutoff is not None:
+        labelled = labelled.loc[labelled.index <= cutoff]
+    if labelled.empty:
+        return [forced]
+    eligible = [
+        f for f in BIC_POOL_SIGNS
+        if f in data.columns and labelled[f].notna().mean() >= BIC_MIN_COVERAGE
+    ]
+    sample = labelled[[forced] + eligible + ["TARGET"]].dropna()
+    if len(sample) < MIN_WINDOW or sample["TARGET"].nunique() < 2:
+        return [forced]
+    try:
+        return forward_stepwise_bic(
+            sample["TARGET"].astype(float), sample[[forced] + eligible], [forced] + eligible,
+            MAX_FEATURES_BIC, seed=[forced], signs=BIC_SIGNS,
+        )
+    except Exception:  # noqa: BLE001 - a failed selection falls back to the spread alone
+        return [forced]
 
 
 def _prob(params: np.ndarray, x: np.ndarray) -> float:
@@ -540,12 +598,9 @@ def _prepare(raw: pd.DataFrame, *, publication_lags: bool = False) -> dict:
 
     y = model_df["TARGET"].astype(float)
     spread_feat = "SPREAD" if "SPREAD" in available else available[0]
-    seed = ["SPREAD"] if "SPREAD" in available else []
 
-    bic_selected = forward_stepwise_bic(y, model_df[available], available, MAX_FEATURES_BIC, seed)
-    if len(bic_selected) <= len(seed):
-        # No valid multivariate combination — fall back to the Wright pair.
-        bic_selected = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
+    # Pre-registered BIC-member rule (stationary pool, signs, cap 4, SPREAD forced).
+    bic_selected = select_bic_features(data) or [spread_feat]
 
     return {
         "data": data,
@@ -899,20 +954,21 @@ def walk_forward(
     Features are shifted by :data:`PUBLICATION_LAG_MONTHS`, so the prediction
     dated ``t`` uses only data published by the end of month ``t``.
 
-    The BIC *feature set* is selected once on the full sample (parameters are
-    re-estimated out-of-sample, selection is not) — the same in-sample-selection
-    caveat the methodology page documents; reselecting features at every refit
-    would multiply runtime without changing the headline conclusion.
+    The BIC member's features are **reselected inside every refit** by
+    :func:`select_bic_features` on that fold's training rows only, so neither
+    selection nor coefficients see future labels. The per-refit selections are
+    stored in ``result.attrs["bic_selections"]``.
     """
     if sm is None or _stats is None:
         raise RuntimeError("statsmodels and scipy are required for walk-forward.")
 
     prep = _prepare(raw, publication_lags=True)
-    data, available, bic_selected = prep["data"], prep["available"], prep["bic_selected"]
+    data, available = prep["data"], prep["available"]
     spread_feat = prep["spread_feat"]
 
     wright_feats = [f for f in [spread_feat, "FEDFUNDS"] if f in available]
-    specs = {"NY Fed": [spread_feat], "Wright": wright_feats, "BIC-selected": bic_selected}
+    base_specs = {"NY Fed": [spread_feat], "Wright": wright_feats}
+    selections: dict[str, list[str]] = {}
 
     em = (
         pd.Series(_stats.norm.cdf(_EM_CONST + _EM_SPREAD * data["SPREAD"].values) * 100, index=data.index)
@@ -932,6 +988,11 @@ def walk_forward(
         # observable until t+12. To avoid look-ahead, train only on rows whose label was known by
         # the refit date: t <= refit_ts - 12 months.
         label_cutoff = refit_ts - pd.DateOffset(months=12)
+
+        # BIC member reselected on this fold's training rows only.
+        fold_bic = select_bic_features(data, cutoff=label_cutoff)
+        selections[refit_ts.strftime("%Y-%m")] = list(fold_bic)
+        specs = {**base_specs, "BIC-selected": fold_bic}
 
         fitted: dict[str, np.ndarray] = {}
         for name, feats in specs.items():
@@ -962,7 +1023,9 @@ def walk_forward(
             if vals:
                 monthly[ts] = float(np.mean(vals))
 
-    return pd.Series(monthly, name="ensemble_oos").sort_index()
+    out = pd.Series(monthly, name="ensemble_oos").sort_index()
+    out.attrs["bic_selections"] = selections
+    return out
 
 
 def expanding_base_rate(target: pd.Series, index: pd.Index, label_lag_months: int = 12) -> pd.Series:
