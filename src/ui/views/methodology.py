@@ -444,15 +444,16 @@ def _labor_section() -> None:
 # ---------------------------------------------------------------- recession
 
 
-# Four forward (12-month-ahead) models that form the ensemble, plus the
-# coincident benchmark shown separately.
+# Four forward (recession-start) models that form the ensemble, plus the
+# "in recession now" nowcast indicators shown separately.
 _PROBIT_MODELS = [
     ("NY Fed", "10y-3m term spread", "Re-estimated probit", "Estrella & Mishkin (1998)"),
     ("Wright", "Spread + fed funds rate", "Re-estimated probit", "Wright (2006)"),
     ("BIC-selected", "Data-driven, sign-constrained", "Forward-stepwise BIC", "Berge (2014)"),
     ("Estrella-Mishkin", "10y-3m term spread", "Closed form, frozen 2006 params", "Estrella & Trubin (2006)"),
 ]
-_PROBIT_BENCHMARK = ("Chauvet-Piger", "Markov-switching (coincident)", "FRED RECPROUSM156N — benchmark, not in ensemble", "Chauvet & Piger")
+_PROBIT_BENCHMARK = ("Chauvet-Piger", "Markov-switching (coincident)", "FRED RECPROUSM156N — nowcast panel, not in ensemble", "Chauvet & Piger")
+_NOWCAST_SAHM = ("Sahm rule", "Real-time unemployment trigger (≥ 0.50 pp)", "FRED SAHMREALTIME — nowcast panel, not in ensemble", "Sahm (2019)")
 
 
 def _recession_section(probit: dict | None) -> None:
@@ -461,19 +462,26 @@ def _recession_section(probit: dict | None) -> None:
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
         "<p>The headline probability is the equal-weighted mean of four "
-        "<b>methodologically distinct</b> 12-month-ahead models, each estimating the "
-        "probability of an NBER recession 12 months ahead over a shared FRED universe. "
+        "<b>methodologically distinct</b> models, each estimating the probability that a "
+        "<b>new NBER recession starts within the next 12 months</b>, over a shared FRED universe. "
         "Diversifying across model structure — from a single-variable yield-curve probit to a "
-        "multivariate BIC model — guards against any one specification's blind spot. A fifth "
-        "series, Chauvet–Piger, is reported as a coincident benchmark but excluded from the "
-        "average (see below).</p>"
+        "multivariate BIC model — guards against any one specification's blind spot. A separate "
+        "<i>nowcast panel</i> (Chauvet–Piger and the Sahm rule) answers \"are we in a recession "
+        "now?\"; it is descriptive only and excluded from the average (see below).</p>"
 
-        "<p><b>1 · Target.</b> The label is a <i>window</i> indicator — 1 if a recession occurs "
-        "in <i>any</i> of the next twelve months, more robust than asking about a single month "
-        "exactly 12 months out:</p>"
+        "<p><b>1 · Target (start-dated).</b> The label is 1 if an NBER business-cycle "
+        "<b>peak</b> falls in the next twelve months, i.e. a new recession starts:</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
-        "y_t = max( USREC_{t+1} , … , USREC_{t+12} )      ∈ {0, 1}"
+        "y_t = 1  if some NBER peak P satisfies t+1 ≤ P ≤ t+12,  else 0\n"
+        "excluded: every month P … T (peak month through trough)"
         "</pre>"
+        "<p>Peaks and troughs are read from FRED <code>USREC</code> (1 from the month after the "
+        "peak through the trough), so the target updates when the NBER dates a new cycle. "
+        "Months already in a recession are <b>dropped from training and scoring</b>: the "
+        "question \"will a new recession start?\" does not apply to them. The peak month itself "
+        "is dropped too, because the recession starts the following month and labelling it 0 "
+        "would be wrong. A label is defined only once its full 12-month window has been "
+        "observed (t+12 ≤ the last USREC month); later months are unlabelled.</p>"
 
         "<p><b>2 · Feature universe &amp; engineering.</b> 35 raw FRED series across eight "
         "categories (activity, industrial, consumer, labor, inflation, housing, banking, yields), "
@@ -512,13 +520,17 @@ def _recession_section(probit: dict | None) -> None:
         "the lowest BIC is added; selection stops when no candidate lowers BIC, or at "
         "<b>9 features</b>.</p>"
 
-        "<p><b>5 · The four models.</b> Three are re-estimated on our data; one is frozen:</p>"
+        "<p><b>5 · The four models.</b> Three are re-estimated on our data (on the start-dated "
+        "target); one is frozen:</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
         "NY Fed            Φ(β0 + β·SPREAD)                   re-estimated\n"
         "Wright (2006)     Φ(β0 + β1·SPREAD + β2·FEDFUNDS)    re-estimated\n"
         "BIC-selected      Φ(β0 + β′x_BIC)                    re-estimated, sign-constrained\n"
         "Estrella–Mishkin  Φ(−0.6045 − 0.7374·SPREAD)         frozen (Estrella–Trubin 2006)"
         "</pre>"
+        "<p>Estrella–Mishkin keeps its published constants, which were estimated for a different "
+        "target (recession in the month 12 months ahead) on data that overlaps the backtest "
+        "window, so it is neither re-fit to the start-dated target nor fully out-of-sample.</p>"
 
         "<p><b>6 · Aggregation.</b> Equal-weighted mean of the four forward probabilities — "
         "deliberately avoiding letting the yield curve dominate when it disagrees with the broader "
@@ -529,11 +541,22 @@ def _recession_section(probit: dict | None) -> None:
         "probit each time, score today's feature row, and take the 5th and 95th percentiles of the "
         "resulting probabilities.</p>"
 
-        "<p><b>Why Chauvet–Piger is a benchmark, not an input.</b> It is a <i>coincident</i> "
-        "smoothed Markov-switching nowcast (FRED <code>RECPROUSM156N</code>) — it estimates "
-        "whether we are in recession <i>now</i>, not 12 months ahead. Averaging a coincident "
-        "nowcast with forward models would blend forecast horizons, so it is shown alongside "
-        "for context but kept out of the ensemble.</p>"
+        "<p><b>8 · Nowcast panel: \"in recession now?\"</b> Two coincident indicators are shown "
+        "in their own panel and are <b>not</b> part of the ensemble: the <b>Chauvet–Piger</b> "
+        "smoothed Markov-switching probability (FRED <code>RECPROUSM156N</code>, flagged at "
+        "≥ 50%) and the real-time <b>Sahm rule</b> (FRED <code>SAHMREALTIME</code>, flagged at "
+        "≥ 0.50 pp). They estimate whether a recession is under way <i>now</i>, a different "
+        "question from the start-dated forecast, so averaging them in would mix targets. They "
+        "are descriptive and not scored. Chauvet–Piger is re-estimated and smoothed with each "
+        "data vintage, so its history is not a real-time record.</p>"
+        "<p><b>9 · Headline while in a recession.</b> If the latest <code>USREC</code> month is a "
+        "recession month, the headline number is <b>withheld</b> (the model has no training "
+        "data for that state) and the nowcast panel is shown first and highlighted. If NBER has "
+        "not dated a recession but either nowcast indicator is over its threshold, the headline "
+        "is shown with a note that it assumes no recession has started yet, and the nowcast "
+        "panel is shown first and highlighted, because the NBER dates peaks months after the "
+        "fact. Otherwise the panel is shown below the headline as context. These thresholds and "
+        "rules were fixed before any results were computed.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -542,10 +565,10 @@ def _recession_section(probit: dict | None) -> None:
         f'<div class="submodel-row"><span class="name">{name}</span>'
         f'<span class="value" style="text-align:right;color:{PALETTE["text_muted"]};">'
         f"{feats} · {method} · {ref}</span></div>"
-        for name, feats, method, ref in [*_PROBIT_MODELS, _PROBIT_BENCHMARK]
+        for name, feats, method, ref in [*_PROBIT_MODELS, _PROBIT_BENCHMARK, _NOWCAST_SAHM]
     )
     st.markdown(
-        '<div class="label-small" style="margin-top:12px;">Four-model ensemble + coincident benchmark</div>'
+        '<div class="label-small" style="margin-top:12px;">Four-model ensemble + nowcast panel (not in ensemble)</div>'
         f'<div class="panel"><div class="panel-body">{body}</div></div>',
         unsafe_allow_html=True,
     )
@@ -716,16 +739,20 @@ def _calibration_section(probit: dict | None) -> None:
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
-        "<p>The ensemble is scored against the realised NBER outcome with three metrics:</p>"
+        "<p>The ensemble is scored against the realised start-dated outcome (an NBER peak in "
+        "the next 12 months). Months already in a recession (peak month through trough) and "
+        "months whose 12-month window is not yet observed are left out of scoring. Three "
+        "metrics:</p>"
         "<ul>"
         "<li><b>Brier score</b> — mean squared error between predicted probabilities and the "
         "0/1 outcome. Lower is better. Skill is measured against two no-skill base rates: the "
         "<i>full-sample</i> rate (the outcome's mean over the scored window, only knowable in "
         "hindsight) and the <i>expanding</i> rate (the mean of every label already observed at "
-        "each date, i.e. labels for months up to 12 months earlier).</li>"
+        "each date, i.e. labels for months up to 12 months earlier, in-recession months "
+        "excluded).</li>"
         "<li><b>AUC</b> — area under the ROC curve. 0.5 is no-skill, 1.0 is perfect ordering.</li>"
         "<li><b>Reliability diagram</b> — predictions binned into deciles vs the empirical "
-        "recession frequency in each bin. A calibrated model sits on the 45° line.</li>"
+        "frequency of a recession start in each bin. A calibrated model sits on the 45° line.</li>"
         "</ul>"
         "<p>The figures here are <i>in-sample</i> (the models see the whole history). For an "
         "honest read of predictive performance, see the walk-forward backtest in section 11.</p>"
@@ -792,11 +819,18 @@ def _walk_forward_section(probit: dict | None) -> None:
         f'color:{PALETTE["text_primary"]};">'
         "<p>In-sample Brier/AUC overstate what a real-time forecaster would have achieved. "
         "The walk-forward backtest fixes this: at each refit date the re-estimated models "
-        "(NY Fed, Wright, BIC) are fit using only observations whose 12-month-ahead outcome "
-        "was already known by that date — i.e. month <code>t</code> enters training only once "
-        "<code>t+12 ≤ refit date</code>, so a label that wouldn't yet have been observed can't "
-        "leak in. Estrella-Mishkin (closed form) and Chauvet-Piger (a published series) are "
-        "inherently out-of-sample.</p>"
+        "(NY Fed, Wright, BIC) are fit using only observations whose start-dated label (an NBER "
+        "peak in <code>t+1 … t+12</code>) was already known by that date — i.e. month "
+        "<code>t</code> enters training only once <code>t+12 ≤ refit date</code>, so a label "
+        "that wouldn't yet have been observed can't leak in. Months already in a recession "
+        "(peak month through trough) are dropped from both training and scoring.</p>"
+        "<p><b>What is not out-of-sample.</b> Estrella-Mishkin is a closed form with constants "
+        "published in 2006: they were estimated on data that overlaps roughly 1989–2005 of this "
+        "window, and for a different target, so that member is not fully out-of-sample. "
+        "Chauvet-Piger is not in the ensemble or this backtest; it is FRED's smoothed series, "
+        "re-estimated with each data vintage, so its history is <b>not</b> a real-time or "
+        "out-of-sample record either. NBER turning points are taken as dated today; the "
+        "NBER's announcement lag is not modelled.</p>"
         "<p><b>Protocol.</b> Annual refits starting <code>1985-01-01</code>; the most recent fit "
         "scores every month until the next refit. Each model is fit on the rows complete for "
         "<i>its own</i> features and joins the ensemble once it has 120 such labelled rows under "
@@ -809,7 +843,9 @@ def _walk_forward_section(probit: dict | None) -> None:
         "reselecting features at every refit would multiply runtime without changing the "
         "headline conclusion.</p>"
         "<p><b>Benchmarks.</b> Skill is reported against both the full-sample base rate "
-        "(hindsight) and the expanding base rate a forecaster could have known at each date.</p>"
+        "(hindsight) and the expanding base rate a forecaster could have known at each date "
+        "(start-dated labels for months up to 12 months earlier, in-recession months "
+        "excluded).</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -823,7 +859,7 @@ def _walk_forward_section(probit: dict | None) -> None:
         return
 
     st.markdown(
-        '<div class="label-small" style="margin-top:8px;">Out-of-sample ensemble probability · NBER recessions shaded</div>',
+        '<div class="label-small" style="margin-top:8px;">Out-of-sample P(new recession starts within 12 months) · NBER recessions shaded (not scored)</div>',
         unsafe_allow_html=True,
     )
     usrec = probit.get("usrec")
@@ -842,7 +878,7 @@ def _walk_forward_section(probit: dict | None) -> None:
     fig.add_hline(y=THRESHOLD_ELEVATED, line=dict(color="#3d4754", width=1, dash="dot"))
     if nber is not None:
         add_recession_shading(fig, nber)
-    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
+    fig.update_yaxes(title="P(new recession starts ≤12m) (%)", range=[0, 100])
     apply_template(fig, height=360, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -868,14 +904,16 @@ def _nber_section() -> None:
         "<p><b>Lag.</b> The NBER announces peaks roughly a year after the fact and troughs "
         "roughly 15 months after the fact. The dating is not a real-time signal; it is the "
         "ground truth against which forward-looking models like ours are scored.</p>"
-        "<p><b>Forward target.</b> The probit dependent variable is the within-12-months "
-        "(window) target</p>"
+        "<p><b>Forward target.</b> The probit dependent variable is start-dated</p>"
         '<pre style="background:#0d1117;padding:10px;color:#d4d4d0;font-size:12px;">'
-        "y_t = 1 if USREC = 1 in any month from t+1 to t+12, else 0"
+        "y_t = 1 if an NBER peak falls in t+1 … t+12, else 0;  months from the peak through the trough are excluded"
         "</pre>"
-        "<p>i.e. \"does a recession occur at some point in the next year?\" — matching how the "
-        "headline probability is read. The point-in-time variant (recession exactly at t+12) "
-        "prints lower, spikier numbers and can miss short recessions.</p>"
+        "<p>i.e. \"does a <i>new</i> recession start in the next year?\" — matching how the "
+        "headline probability is read. Peaks and troughs come from the runs of "
+        "<code>USREC</code> = 1 (peak = the month before the first recession month). The earlier "
+        "\"window\" target (any recession month in t+1 … t+12) also counted months deep inside a "
+        "recession as positives, mixing \"a recession will start\" with \"we are already in one\"; "
+        "the second question is covered by the nowcast panel instead.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -981,8 +1019,8 @@ def _growth_section() -> None:
     st.markdown(
         '<div class="panel"><div class="panel-body" style="font-size:13px;line-height:1.7;'
         f'color:{PALETTE["text_primary"]};">'
-        "<p>The recession ensemble is <i>forward-looking</i> (probability of a downturn in the "
-        "next 12 months). The Growth tab is the <i>coincident</i> complement — how fast output is "
+        "<p>The recession ensemble is <i>forward-looking</i> (probability that a new recession "
+        "starts in the next 12 months). The Growth tab is the <i>coincident</i> complement — how fast output is "
         "expanding right now — because the official GDP print arrives with a long lag and is heavily "
         "revised (section 13).</p>"
         "<p><b>Surface, don't rebuild.</b> Institutional nowcasts (the Atlanta Fed's bottom-up "
@@ -1003,7 +1041,7 @@ def _growth_section() -> None:
         "available z-scores per month. The result is a unitless momentum gauge (0 = trend, positive "
         "= above trend), not a GDP forecast — a transparent corroboration for the nowcast, not a "
         "black-box DFM. The tab validates it two ways: a scatter of the factor against the GDP "
-        "print (it should slope up), and an overlay against the 12-month recession probability "
+        "print (it should slope up), and an overlay against the recession-start probability "
         "(they move inversely — weak current momentum coincides with elevated forward risk).</p>"
         "<p><b>Revisions, measured right.</b> The real-time-vs-revised panel compares the "
         "first-published vs latest-revised <i>annualized growth rate</i>, not the level. GDP "
@@ -1035,7 +1073,7 @@ def _credit_section() -> None:
         "<b>≥90</b> stressed · <b>70–90</b> elevated · <b>40–70</b> moderate · <b>&lt;40</b> calm.</p>"
         "<p><b>Overlap is intentional.</b> NFCI already embeds credit spreads, so the inputs are "
         "not independent — the composite is a robust summary of one underlying stress factor, not "
-        "a multi-signal model. It's plotted against the 12-month recession probability, where a "
+        "a multi-signal model. It's plotted against the recession-start probability, where a "
         "positive correlation is expected (stress and forward risk rise together).</p>"
         "<p><b>CLO supply gauge — and honest scope.</b> The CLO panel reads the Fed's quarterly "
         "Z.1 Financial-Accounts estimate of CLO liabilities outstanding and leveraged loans held "
@@ -1149,27 +1187,28 @@ def _limitations() -> None:
         ),
         (
             "In-sample headline · mitigated.",
-            "The default reading is fit on the full sample. The walk-forward backtest "
+            "The default reading is fit on the full sample (start-dated target). The walk-forward backtest "
             "(section 11) is computed at app startup and surfaces true out-of-sample "
             "Brier / AUC / reliability — use that for honest predictive performance, not "
             "the in-sample headline.",
         ),
         (
-            "Coincident benchmark · separate.",
-            "<b>Chauvet–Piger</b> is a <i>coincident</i> smoothed nowcast — it answers "
-            "\"are we in recession now?\", not \"within 12 months?\" — so it is reported beside "
-            "the ensemble as a benchmark and excluded from the average, keeping the headline a "
-            "single-horizon (12-month) number.",
+            "Nowcast panel · separate.",
+            "<b>Chauvet–Piger</b> and the <b>Sahm rule</b> are <i>coincident</i> indicators — they "
+            "answer \"are we in recession now?\", not \"will a new one start within 12 months?\" — so "
+            "they sit in their own descriptive panel and are excluded from the average. "
+            "Chauvet–Piger is smoothed and revised each vintage (not real-time).",
         ),
         (
-            "Target definition · window, with one frozen exception.",
-            "The dependent variable is <code>y_t = 1</code> if an NBER recession occurs in any "
-            "month from <code>t+1</code> to <code>t+12</code> — the \"within 12 months\" reading "
-            "the headline implies. The re-estimated models (NY Fed, Wright, BIC) are trained on "
-            "this window target; the closed-form <b>Estrella–Mishkin</b> model keeps its frozen "
-            "2006 point-in-time coefficients, so it sits on a slightly different basis within the "
-            "ensemble. The point-in-time variant prints lower, spikier numbers and can miss "
-            "short recessions; the Boston Fed has documented material dispersion between the two.",
+            "Target definition · start-dated, with one frozen exception.",
+            "The dependent variable is <code>y_t = 1</code> if an NBER peak falls in "
+            "<code>t+1</code> … <code>t+12</code> (a new recession starts within 12 months); months "
+            "from the peak through the trough are excluded. The re-estimated models (NY Fed, "
+            "Wright, BIC) are trained on this target; the closed-form <b>Estrella–Mishkin</b> model "
+            "keeps its frozen 2006 point-in-time coefficients, so it sits on a different basis "
+            "within the ensemble and is not calibrated to the start-dated target. Only four NBER "
+            "peaks fall inside the out-of-sample window, so every backtest statistic rests on "
+            "very few events.",
         ),
         (
             "Feature selection · in-sample.",
@@ -1195,9 +1234,10 @@ def _limitations() -> None:
         (
             "Model comparison · fully live.",
             "The model comparison is computed live from FRED on every rebuild — no "
-            "hand-entered street estimates. The Chauvet–Piger reading is FRED's smoothed "
-            "Markov-switching series (<code>RECPROUSM156N</code>); the others are probit "
-            "specifications re-estimated on the FRED panel.",
+            "hand-entered street estimates. The four ensemble members are probit specifications "
+            "(three re-estimated on the FRED panel, one frozen). The nowcast panel's "
+            "Chauvet–Piger reading is FRED's smoothed Markov-switching series "
+            "(<code>RECPROUSM156N</code>) and is not a member.",
         ),
     ]
     body = "".join(

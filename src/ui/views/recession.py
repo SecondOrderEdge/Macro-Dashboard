@@ -1,8 +1,8 @@
-"""Recession page — four-model probit ensemble (plus a coincident benchmark).
+"""Recession page — four-model recession-start ensemble + "in recession now" nowcast panel.
 
 Three tabs surface the same analytics the weekly investment-committee email
 reports: The Reading (headline + history + drivers), Under the Hood (the four
-forward models + coincident benchmark, comparison, indicator percentiles),
+forward models + nowcast reading, comparison, indicator percentiles),
 Watchlist (trigger levels, adverse scenario), and Scenario (what-if sliders).
 
 The report dict is produced by :mod:`src.models.recession_probit`.
@@ -27,6 +27,14 @@ from src.ui.components import (
     apply_template,
     metric_card,
     sparkline_svg,
+)
+from src.ui.nowcast import (
+    HEADLINE_LABEL,
+    headline_applicable,
+    headline_value_text,
+    nowcast_panel_html,
+    panel_is_prominent,
+    state_note,
 )
 from src.ui.theme import PALETTE
 
@@ -137,17 +145,28 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
         report["ensemble_history"].tail(60).values, color=color, width=240, height=44
     )
 
+    # When a nowcast indicator is over its threshold (or NBER has dated a
+    # recession), the nowcast panel goes first and is highlighted.
+    prominent = panel_is_prominent(report)
+    if prominent:
+        st.markdown(nowcast_panel_html(report), unsafe_allow_html=True)
+
+    applicable = headline_applicable(report)
+    note = state_note(report)
     left, right = st.columns([1, 1])
     with left:
         st.markdown(
             metric_card(
-                label="12-month recession probability · 4-model ensemble",
-                value=f"{ens:.0f}",
-                unit="%",
-                risk_color_hex=color,
+                label=f"{HEADLINE_LABEL} · 4-model ensemble",
+                value=headline_value_text(report),
+                unit="%" if applicable else "",
+                risk_color_hex=color if applicable else PALETTE["text_muted"],
                 sparkline_html=spark,
-                badge=report["signal"],
-                subline=f"{ci_txt} · models range {p_lo:.0f}–{p_hi:.0f}% · consensus {report['consensus']}",
+                badge=report["signal"] if applicable else "IN RECESSION",
+                subline=(
+                    f"{ci_txt} · models range {p_lo:.0f}–{p_hi:.0f}% · consensus {report['consensus']}"
+                    if applicable else "withheld: not applicable while in an NBER-dated recession"
+                ) + (f" · {note}" if note and applicable else ""),
             ),
             unsafe_allow_html=True,
         )
@@ -170,6 +189,9 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
             f'<div class="panel-body">{body}</div></div>',
             unsafe_allow_html=True,
         )
+
+    if not prominent:
+        st.markdown(nowcast_panel_html(report), unsafe_allow_html=True)
 
     # History: ensemble + BIC fitted, NBER shaded.
     ens_hist = report["ensemble_history"]
@@ -195,7 +217,7 @@ def _render_reading(report: dict, nber: pd.Series) -> None:
     fig.add_hline(y=THRESHOLD_ELEVATED, line=dict(color=PALETTE["risk_critical"], width=1, dash="dash"))
     fig.add_hline(y=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
     add_recession_shading(fig, nber)
-    fig.update_yaxes(title="Recession probability (%)", range=[0, 100])
+    fig.update_yaxes(title="P(new recession starts ≤12m) (%)", range=[0, 100])
     apply_template(fig, height=380)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -222,10 +244,21 @@ def _reading_text(report: dict) -> str:
     probs = report["model_probabilities"]
     p_lo, p_hi = min(probs.values()), max(probs.values())
     consensus = report["consensus"].lower()
+    if not headline_applicable(report):
+        return (
+            "The latest NBER-dated month is a recession month. The four-model ensemble estimates "
+            "the probability that a <i>new</i> recession starts within 12 months and is trained "
+            "only on months not already in a recession, so its reading is not applicable here "
+            "and is withheld. The nowcast panel above shows the coincident indicators."
+        )
     parts = [
-        f"Our four-model ensemble estimates a <b>{ens:.0f}%</b> probability of a U.S. "
-        f"recession within 12 months — consistent with <b>{_consistent_with(ens)}</b>."
+        f"The four-model ensemble estimates a <b>{ens:.0f}%</b> probability that a new U.S. "
+        f"recession starts within the next 12 months (an NBER peak in that window) — "
+        f"historically associated with <b>{_consistent_with(ens)}</b>."
     ]
+    note = state_note(report)
+    if note:
+        parts.append(f"<b>{note}</b>")
     lo, hi = report.get("ci_lower"), report.get("ci_upper")
     if lo is not None and hi is not None:
         parts.append(f"The BIC model's bootstrap 90% interval spans {lo:.0f}–{hi:.0f}%.")
@@ -279,8 +312,8 @@ def _render_under_hood(report: dict) -> None:
     benchmarks = report.get("benchmark_probabilities") or {}
     ens = report["ensemble_probability"]
 
-    # Cards: the ensemble, then the four forward (12-month-ahead) models, then
-    # any coincident benchmarks shown separately (not part of the average).
+    # Cards: the ensemble, then the four forward (recession-start) models, then
+    # the nowcast reading shown separately (not part of the average).
     order = ["NY Fed", "Wright", "BIC-selected", "Estrella-Mishkin"]
     cards = [("4-model ensemble", ens, "ensemble")] + [
         (name, probs[name], "forward") for name in order if name in probs
@@ -296,8 +329,8 @@ def _render_under_hood(report: dict) -> None:
                     risk_color_hex=PALETTE["accent"] if kind == "ensemble" else _prob_color(val),
                     subline={
                         "ensemble": "mean of 4 forward models",
-                        "forward": "12m-ahead probability",
-                        "benchmark": "coincident · not in ensemble",
+                        "forward": "P(start ≤12m)",
+                        "benchmark": "nowcast · not in ensemble",
                     }[kind],
                 ),
                 unsafe_allow_html=True,
@@ -322,24 +355,26 @@ def _render_under_hood(report: dict) -> None:
     fig.add_vline(x=ens, line=dict(color=PALETTE["accent"], width=1, dash="dash"))
     fig.add_vline(x=THRESHOLD_WARNING, line=dict(color=PALETTE["risk_elevated"], width=1, dash="dot"))
     max_x = max(s.max(), *(benchmarks.values() if benchmarks else [0]))
-    fig.update_xaxes(title="12-month recession probability (%)", range=[0, max(max_x * 1.25, 40)])
+    fig.update_xaxes(title="P(new recession starts within 12 months) (%)", range=[0, max(max_x * 1.25, 40)])
     apply_template(fig, height=300, show_legend=False)
     st.plotly_chart(fig, use_container_width=True)
 
     bench_txt = ""
     if "Chauvet-Piger" in benchmarks:
         bench_txt = (
-            f" <b>Chauvet-Piger</b> ({benchmarks['Chauvet-Piger']:.0f}%) is shown separately as a "
-            "<i>coincident</i> benchmark — FRED's smoothed Markov-switching nowcast "
+            f" <b>Chauvet-Piger</b> ({benchmarks['Chauvet-Piger']:.0f}%) is shown separately in the "
+            "<i>nowcast</i> panel with the Sahm rule — FRED's smoothed Markov-switching estimate "
             "(<code>RECPROUSM156N</code>) of whether we're in recession <i>now</i>, a different "
-            "horizon — so it is excluded from the ensemble average."
+            "question — so it is excluded from the ensemble average."
         )
     st.markdown(
         f'<div class="panel"><div class="panel-body" style="font-size:12px;color:{PALETTE["text_primary"]};line-height:1.6;">'
         "All probabilities are computed live from FRED — none are hand-entered. "
         "<b>NY Fed</b> and <b>Estrella-Mishkin</b> use the 10y-3m term spread; <b>Wright</b> adds the fed funds rate; "
         "<b>BIC-selected</b> is a sign-constrained multivariate probit. The ensemble is the equal-weighted "
-        "average of these four 12-month-ahead models."
+        "average of these four models of the probability that a new recession starts within 12 months. "
+        "Estrella-Mishkin keeps its frozen published constants, which were estimated for a different "
+        "target (recession in the month 12 months ahead)."
         f"{bench_txt}"
         "</div></div>",
         unsafe_allow_html=True,

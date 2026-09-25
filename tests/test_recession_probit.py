@@ -1,4 +1,4 @@
-"""Five-model probit ensemble: feature engineering, selection, report assembly.
+"""Four-model probit ensemble: feature engineering, selection, report assembly.
 
 These tests exercise the pure modelling functions on synthetic FRED-style data
 so they never touch the network. Recessions are generated as a function of a
@@ -295,11 +295,15 @@ def test_complete_rows_is_per_model_not_global():
     assert cut.index.max() == idx[9] and len(cut) == 10
 
 
-def test_walk_forward_not_truncated_by_short_history_feature(synthetic_raw):
+def test_walk_forward_not_truncated_by_short_history_feature(synthetic_raw, monkeypatch):
     # A candidate feature starting in 1976 (enough coverage to be "available")
     # used to truncate every model's training sample to 1976+ via a global
     # dropna, delaying the first OOS month past 1985. Per-model complete rows
     # let the spread models score from the requested start.
+    # Pinned to the window target: this fixture's synthetic recessions are long
+    # (1969-75), so the start-dated target's in-recession exclusions would leave
+    # < MIN_WINDOW rows by 1985 for reasons unrelated to what is tested here.
+    monkeypatch.setattr(rp, "TARGET_DEFINITION", "window")
     raw = synthetic_raw.copy()
     late = pd.Series(np.linspace(0.5, 2.0, len(raw)), index=raw.index)
     late[raw.index < "1976-06-01"] = np.nan

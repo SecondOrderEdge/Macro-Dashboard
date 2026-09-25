@@ -479,7 +479,7 @@ def _row_growth_vs_risk(factor: dict, prob: pd.Series, nber: pd.Series) -> None:
             f'<div style="margin-top:8px;color:{PALETTE["text_tiny"]};font-size:11px;">'
             "A negative r is expected: weak current growth coincides with elevated "
             "forward recession risk. Growth momentum is contemporaneous; the "
-            "probability looks 12 months ahead.</div>"
+            "probability is for a new recession starting within the next 12 months.</div>"
             "</div></div>",
             unsafe_allow_html=True,
         )
@@ -541,7 +541,7 @@ def _interpretation(head: dict, factor: dict, prob: pd.Series | None = None) -> 
 
     bits = [
         "<p><b>What this tab is.</b> The recession models look <i>forward</i> "
-        "(probability of a downturn in the next 12 months). This tab looks at "
+        "(probability that a new recession starts in the next 12 months). This tab looks at "
         "the <i>present</i>: how fast output is growing right now, before the "
         "official quarterly print lands and before it is revised.</p>",
         "<p><b>GDPNow vs the official print.</b> The Atlanta Fed's GDPNow "
@@ -575,7 +575,7 @@ def _interpretation(head: dict, factor: dict, prob: pd.Series | None = None) -> 
         if np.isfinite(r):
             bits.append(
                 f"<p><b>Link to recession risk.</b> Across history the factor and "
-                f"the 12-month recession probability move inversely (r = {r:+.2f}): "
+                f"the recession-start probability move inversely (r = {r:+.2f}): "
                 "weak current momentum has coincided with elevated forward risk. "
                 "This tab measures the present; the recession ensemble prices the "
                 "next year.</p>"

@@ -16,6 +16,7 @@ from src.ui.components import (
     metric_card,
     sparkline_svg,
 )
+from src.ui.nowcast import HEADLINE_LABEL, headline_value_text, nowcast_panel_html, state_note
 from src.ui.theme import PALETTE, risk_color
 
 
@@ -55,6 +56,11 @@ def _row_one(current: dict, history: pd.DataFrame, lame_hist: pd.Series, spreads
 
     with cols[0]:
         _recession_card(current, history)
+        # Compact "in recession now?" panel under the headline (highlighted and
+        # annotated when a nowcast indicator or NBER flags a recession).
+        report_like = current.get("report_like")
+        if report_like:
+            st.markdown(nowcast_panel_html(report_like, compact=True), unsafe_allow_html=True)
         if st.button("Drill into Recession →", key="drill_recession"):
             st.session_state.pending_nav = "Recession"
             st.rerun()
@@ -74,8 +80,18 @@ def _row_one(current: dict, history: pd.DataFrame, lame_hist: pd.Series, spreads
 
 def _recession_card(current: dict, history: pd.DataFrame) -> None:
     ensemble_now = float(current["ensemble"])
+    report_like = current.get("report_like") or {"ensemble_probability": ensemble_now}
+    shown = headline_value_text(report_like)
+    withheld = shown == "—"
     band = "LOW" if ensemble_now < 20 else "ELEVATED" if ensemble_now < 40 else "HIGH" if ensemble_now < 60 else "CRITICAL"
-    color = risk_color(band)
+    if withheld:
+        band = "IN RECESSION"
+    color = risk_color(band) if not withheld else PALETTE["text_muted"]
+    note = state_note(report_like)
+    note_html = (
+        f'<div class="metric-sub" style="margin-top:8px;color:{PALETTE["risk_critical"]};">{note}</div>'
+        if note else ""
+    )
 
     spark = ""
     if "ensemble" in history.columns:
@@ -93,15 +109,15 @@ def _recession_card(current: dict, history: pd.DataFrame) -> None:
     html = f"""
 <div class="panel" style="height:100%;">
   <div class="panel-header">
-    <span>Recession Probability · 12-month forward</span>
+    <span>{HEADLINE_LABEL}</span>
     <span class="risk-badge" style="color:{color};">{band}</span>
   </div>
   <div class="panel-body">
     <div style="display:flex;align-items:flex-start;gap:24px;">
       <div>
-        <div class="metric-big data-font" style="color:{color};">{ensemble_now:.0f}<span class="metric-unit">%</span></div>
-        <div class="metric-sub">4-model ensemble</div>
-        <div style="margin-top:10px;">{spark}</div>
+        <div class="metric-big data-font" style="color:{color};">{shown}<span class="metric-unit">{"" if withheld else "%"}</span></div>
+        <div class="metric-sub">4-model ensemble · NBER peak in next 12 months</div>
+        <div style="margin-top:10px;">{spark}</div>{note_html}
       </div>
       <div style="flex:1;min-width:0;">
         {sub_rows}
@@ -351,7 +367,7 @@ def _todays_read(ensemble_now: float, lame_now: float, curve_now: float, current
     parts: list[str] = []
     if np.isfinite(ensemble_now):
         parts.append(
-            f"The ensemble puts <b>12-month recession probability at {ensemble_now:.0f}%</b>."
+            f"The ensemble puts the <b>probability that a new recession starts within 12 months at {ensemble_now:.0f}%</b>."
         )
     if np.isfinite(curve_now):
         if curve_now < 0:
