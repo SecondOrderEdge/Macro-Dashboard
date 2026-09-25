@@ -14,8 +14,11 @@ Exit codes:
 
 from __future__ import annotations
 
+import html
 import os
+import re
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -24,11 +27,18 @@ _TARGET = _ROOT / "data" / "market_probability_tracker.csv"
 
 # The published "MPT Historical Data" download (an .xlsx). Override via the
 # MPT_DATA_URL env / Actions variable if the Atlanta Fed ever relocates it.
+# (Moved from .../Documents/cenfis/... in Sep 2026; the old path now returns an
+# HTTP 200 HTML "404 Page - Not Found" page.)
 _DEFAULT_URL = (
     "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/"
-    "cenfis/market-probability-tracker/mpt_histdata.xlsx"
+    "research-and-data/data/market-probability-tracker/mpt_histdata.xlsx"
 )
 _URL = os.environ.get("MPT_DATA_URL", "").strip() or _DEFAULT_URL
+
+# Tracker landing page — scraped for the current .xlsx link if the URL above
+# stops serving a spreadsheet (the Atlanta Fed has relocated it before).
+_PAGE_URL = "https://www.atlantafed.org/research-and-data/data/market-probability-tracker"
+_LINK_RE = re.compile(r"""href=["']([^"']*mpt_histdata\.xlsx[^"']*)["']""", re.IGNORECASE)
 
 # The published "MPT Historical Data" download is an .xlsx; the in-repo file is
 # the long CSV the parser expects. These are the columns we serialise to.
@@ -97,7 +107,37 @@ def _to_csv_text(raw: bytes) -> str | None:
             print(f"  sheet {sheet!r} columns: {cols}")
         return None
 
-    return raw.decode("utf-8-sig", errors="replace")
+    text = raw.decode("utf-8-sig", errors="replace")
+    if _looks_like_html(text):
+        print(
+            "ERROR: download is an HTML page, not the .xlsx/CSV export (the file may "
+            "have moved, or a bot-block page was served)."
+        )
+        return None
+    return text
+
+
+def _is_xlsx(raw: bytes) -> bool:
+    return raw[:4] == b"PK\x03\x04"
+
+
+def _looks_like_html(text: str) -> bool:
+    head = text.lstrip()[:512].lower()
+    return head.startswith("<") or "<html" in head or "<!doctype" in head
+
+
+def _fetch(url: str) -> bytes:
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read()
+
+
+def _discover_url(page_html: str) -> str | None:
+    """Return the absolute mpt_histdata.xlsx link from the tracker page, if any."""
+    match = _LINK_RE.search(page_html)
+    if not match:
+        return None
+    return urllib.parse.urljoin(_PAGE_URL, html.unescape(match.group(1)))
 
 
 def main() -> int:
@@ -107,12 +147,24 @@ def main() -> int:
 
     print(f"Downloading Market Probability Tracker data from {_URL}")
     try:
-        req = urllib.request.Request(_URL, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read()
+        raw = _fetch(_URL)
     except Exception as exc:  # noqa: BLE001 - any network/HTTP failure
-        print(f"ERROR: download from MPT_DATA_URL failed: {exc}")
+        print(f"ERROR: download from {_URL} failed: {exc}")
         return 1
+
+    if not _is_xlsx(raw) and _looks_like_html(raw[:2048].decode("utf-8", errors="replace")):
+        # The URL served an HTML page (e.g. a soft 404 after a relocation).
+        # Look up the current download link on the tracker page and retry once.
+        print(f"URL returned HTML, not a spreadsheet; looking up the link on {_PAGE_URL}")
+        try:
+            found = _discover_url(_fetch(_PAGE_URL).decode("utf-8", errors="replace"))
+            if found and found != _URL:
+                print(f"Downloading Market Probability Tracker data from {found}")
+                raw = _fetch(found)
+            else:
+                print("No different mpt_histdata.xlsx link found on the tracker page.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: link discovery failed: {exc}")
 
     text = _to_csv_text(raw)
     if text is None:
