@@ -243,3 +243,99 @@ def test_sign_constraint_helper_rejects_wrong_sign():
         params = pd.Series({"const": 0.1, "SPREAD": -0.5})
 
     assert rp.check_sign_constraints(_Res2(), ["SPREAD"]) is True
+
+
+# ------------------------------------------------ OOS backtest: benchmark, samples, lags
+
+
+def test_expanding_base_rate_uses_only_labels_known_at_each_date():
+    idx = pd.date_range("2000-01-01", periods=48, freq="MS")
+    y = pd.Series(np.r_[np.zeros(12), np.ones(12), np.zeros(24)], index=idx)
+    br = rp.expanding_base_rate(y, idx, label_lag_months=12)
+    # Nothing is known during the first 12 months.
+    assert br.iloc[:12].isna().all()
+    # At month t the rate is the mean of labels for months <= t-12.
+    for t in [idx[12], idx[20], idx[30], idx[47]]:
+        known = y.loc[: t - pd.DateOffset(months=12)]
+        assert br.loc[t] == pytest.approx(known.mean())
+    # A label that only becomes observable later must not move today's rate.
+    y2 = y.copy()
+    y2.iloc[40:] = 1.0
+    assert rp.expanding_base_rate(y2, idx).loc[idx[45]] == pytest.approx(br.loc[idx[45]])
+
+
+def test_calibration_stats_reports_both_benchmarks():
+    idx = pd.date_range("1967-01-01", "2020-12-01", freq="MS")
+    rng = np.random.default_rng(5)
+    # Recession windows every ~8 years so both classes appear in and before the window.
+    y = pd.Series(((idx.year % 8) == 0).astype(float), index=idx)
+    pred = (y * 0.5 + 0.25 + rng.normal(0, 0.05, len(idx))).clip(0, 1) * 100
+    oos = pred.loc["1985-01-01":]
+    stats = rp.calibration_stats(oos, y)
+    for key in ("baseline_brier", "skill_score", "baseline_brier_expanding", "skill_score_expanding"):
+        assert np.isfinite(stats[key])
+    assert stats["n_obs_expanding"] == stats["n_obs"] == len(oos)  # target history predates the window
+    assert stats["start"] == oos.index.min() and stats["end"] == oos.index.max()
+    # Full-sample baseline is the Brier of the in-window mean: m * (1 - m).
+    m = y.loc[oos.index].mean()
+    assert stats["baseline_brier"] == pytest.approx(m * (1 - m))
+    # Expanding baseline is the Brier of the known-at-the-time rate.
+    br = rp.expanding_base_rate(y, oos.index)
+    assert stats["baseline_brier_expanding"] == pytest.approx(float(((br - y.loc[oos.index]) ** 2).mean()))
+
+
+def test_complete_rows_is_per_model_not_global():
+    idx = pd.date_range("1970-01-01", periods=60, freq="MS")
+    data = pd.DataFrame(
+        {"SPREAD": 1.0, "LATE": np.r_[np.full(24, np.nan), np.ones(36)], "TARGET": 0.0}, index=idx
+    )
+    assert rp.complete_rows(data, ["SPREAD"]).index.min() == idx[0]
+    assert rp.complete_rows(data, ["SPREAD", "LATE"]).index.min() == idx[24]
+    cut = rp.complete_rows(data, ["SPREAD"], cutoff=idx[9])
+    assert cut.index.max() == idx[9] and len(cut) == 10
+
+
+def test_walk_forward_not_truncated_by_short_history_feature(synthetic_raw):
+    # A candidate feature starting in 1976 (enough coverage to be "available")
+    # used to truncate every model's training sample to 1976+ via a global
+    # dropna, delaying the first OOS month past 1985. Per-model complete rows
+    # let the spread models score from the requested start.
+    raw = synthetic_raw.copy()
+    late = pd.Series(np.linspace(0.5, 2.0, len(raw)), index=raw.index)
+    late[raw.index < "1976-06-01"] = np.nan
+    raw["T10Y2Y"] = late
+    data, cols, _ = rp.engineer_features(raw)
+    assert "T10Y2Y" in rp.filter_by_coverage(data, cols)
+    oos = rp.walk_forward(raw, oos_start="1985-01-01", refit_every_months=12)
+    assert oos.index.min() == pd.Timestamp("1985-01-01")
+
+
+def test_publication_lags_shift_macro_series_not_markets_or_target(synthetic_raw):
+    raw = synthetic_raw.copy()
+    raw["GDPC1"] = np.arange(len(raw), dtype=float)
+    lagged = rp.apply_publication_lags(raw)
+    assert rp.PUBLICATION_LAG_MONTHS["UNRATE"] == 1 and rp.PUBLICATION_LAG_MONTHS["GDPC1"] == 4
+    pd.testing.assert_series_equal(lagged["UNRATE"], raw["UNRATE"].shift(1))
+    pd.testing.assert_series_equal(lagged["GDPC1"], raw["GDPC1"].shift(4))
+    for market in ("GS10", "TB3MS", "FEDFUNDS"):
+        pd.testing.assert_series_equal(lagged[market], raw[market])
+    pd.testing.assert_series_equal(lagged["USREC"], raw["USREC"])
+
+    plain, _, _ = rp.engineer_features(raw)
+    lagged_feats, _, _ = rp.engineer_features(raw, publication_lags=True)
+    pd.testing.assert_series_equal(plain["TARGET"], lagged_feats["TARGET"])
+    pd.testing.assert_series_equal(plain["SPREAD"], lagged_feats["SPREAD"])
+    pd.testing.assert_series_equal(lagged_feats["UNRATE_CHG3"], plain["UNRATE_CHG3"].shift(1))
+
+
+def test_walk_forward_uses_publication_lagged_features(synthetic_raw, monkeypatch):
+    calls = []
+    real_prepare = rp._prepare
+
+    def spy(raw, **kwargs):
+        calls.append(kwargs)
+        return real_prepare(raw, **kwargs)
+
+    monkeypatch.setattr(rp, "_prepare", spy)
+    rp.walk_forward(synthetic_raw, oos_start="1995-01-01", refit_every_months=24)
+    assert calls and calls[0].get("publication_lags") is True

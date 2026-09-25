@@ -719,13 +719,16 @@ def _calibration_section(probit: dict | None) -> None:
         "<p>The ensemble is scored against the realised NBER outcome with three metrics:</p>"
         "<ul>"
         "<li><b>Brier score</b> — mean squared error between predicted probabilities and the "
-        "0/1 outcome. Lower is better; the unconditional base rate sets the no-skill floor.</li>"
+        "0/1 outcome. Lower is better. Skill is measured against two no-skill base rates: the "
+        "<i>full-sample</i> rate (the outcome's mean over the scored window, only knowable in "
+        "hindsight) and the <i>expanding</i> rate (the mean of every label already observed at "
+        "each date, i.e. labels for months up to 12 months earlier).</li>"
         "<li><b>AUC</b> — area under the ROC curve. 0.5 is no-skill, 1.0 is perfect ordering.</li>"
         "<li><b>Reliability diagram</b> — predictions binned into deciles vs the empirical "
         "recession frequency in each bin. A calibrated model sits on the 45° line.</li>"
         "</ul>"
         "<p>The figures here are <i>in-sample</i> (the models see the whole history). For an "
-        "honest read of predictive performance, see the walk-forward backtest in section 10.</p>"
+        "honest read of predictive performance, see the walk-forward backtest in section 11.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -746,15 +749,26 @@ def _calibration_panel(stats: dict | None, label: str) -> None:
         brier = stats.get("brier", float("nan"))
         baseline = stats.get("baseline_brier", float("nan"))
         skill = stats.get("skill_score", float("nan"))
+        baseline_exp = stats.get("baseline_brier_expanding", float("nan"))
+        skill_exp = stats.get("skill_score_expanding", float("nan"))
         auc = stats.get("auc", float("nan"))
         n = stats.get("n_obs", 0)
+        start, end = stats.get("start"), stats.get("end")
+
+        def _fmt(v, spec):
+            return format(v, spec) if v is not None and np.isfinite(v) else "—"
+
         rows = [
-            (f"Brier ({label})", f"{brier:.4f}" if np.isfinite(brier) else "—"),
-            ("Base-rate Brier", f"{baseline:.4f}" if np.isfinite(baseline) else "—"),
-            ("Skill score", f"{skill:+.1f}%" if np.isfinite(skill) else "—"),
-            (f"AUC ({label})", f"{auc:.3f}" if np.isfinite(auc) else "—"),
+            (f"Brier ({label})", _fmt(brier, ".4f")),
+            ("Base-rate Brier · full-sample", _fmt(baseline, ".4f")),
+            ("Skill vs full-sample", _fmt(skill, "+.1f") + ("%" if np.isfinite(skill) else "")),
+            ("Base-rate Brier · expanding", _fmt(baseline_exp, ".4f")),
+            ("Skill vs expanding", _fmt(skill_exp, "+.1f") + ("%" if np.isfinite(skill_exp) else "")),
+            (f"AUC ({label})", _fmt(auc, ".3f")),
             ("Observations", f"{n:,}"),
         ]
+        if start is not None and end is not None:
+            rows.append(("Window", f"{pd.Timestamp(start):%Y-%m} → {pd.Timestamp(end):%Y-%m}"))
         body = "".join(
             f'<div class="submodel-row"><span class="name">{lab}</span>'
             f'<span class="value">{val}</span></div>'
@@ -783,12 +797,19 @@ def _walk_forward_section(probit: dict | None) -> None:
         "<code>t+12 ≤ refit date</code>, so a label that wouldn't yet have been observed can't "
         "leak in. Estrella-Mishkin (closed form) and Chauvet-Piger (a published series) are "
         "inherently out-of-sample.</p>"
-        "<p><b>Protocol.</b> Annual refits from <code>1985-01-01</code>; the most recent fit "
-        "scores every month until the next refit. The BIC <i>feature set</i> is selected once "
-        "on the full sample (coefficients are re-estimated out-of-sample, selection is not) — "
+        "<p><b>Protocol.</b> Annual refits starting <code>1985-01-01</code>; the most recent fit "
+        "scores every month until the next refit. Each model is fit on the rows complete for "
+        "<i>its own</i> features and joins the ensemble once it has 120 such labelled rows under "
+        "the 12-month cutoff; the scored window actually used is shown as <i>Window</i> in the "
+        "panel below. Features are shifted to their approximate publication dates (most "
+        "monthly macro series one month, quarterly GDP four months after the quarter's first "
+        "month; market rates none), so the prediction dated month <code>t</code> uses only data "
+        "public by the end of <code>t</code>. The BIC <i>feature set</i> is selected once on the "
+        "full sample (coefficients are re-estimated out-of-sample, selection is not) — "
         "reselecting features at every refit would multiply runtime without changing the "
-        "headline conclusion. The OOS series therefore starts once enough labelled history has "
-        "accumulated under the 12-month cutoff.</p>"
+        "headline conclusion.</p>"
+        "<p><b>Benchmarks.</b> Skill is reported against both the full-sample base rate "
+        "(hindsight) and the expanding base rate a forecaster could have known at each date.</p>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -1129,7 +1150,7 @@ def _limitations() -> None:
         (
             "In-sample headline · mitigated.",
             "The default reading is fit on the full sample. The walk-forward backtest "
-            "(section 10) is computed at app startup and surfaces true out-of-sample "
+            "(section 11) is computed at app startup and surfaces true out-of-sample "
             "Brier / AUC / reliability — use that for honest predictive performance, not "
             "the in-sample headline.",
         ),
