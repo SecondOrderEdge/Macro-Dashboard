@@ -101,7 +101,8 @@ def _build_models(cache_version: str) -> dict:
 
 
 def _probit_ensemble_now(models: dict) -> float:
-    """Headline 12-month recession probability from the four-model probit ensemble."""
+    """Headline probability (from the four-model probit ensemble) that a new
+    recession starts within 12 months."""
     probit = models.get("probit") or {}
     if not probit or "error" in probit:
         return float("nan")
@@ -118,6 +119,12 @@ def _recession_view(models: dict) -> tuple[dict, pd.DataFrame]:
         "ensemble": probit["ensemble_probability"],
         "submodels": probit.get("model_probabilities", {}),
         "drivers": {},
+        # Minimal report view for the headline-state logic + nowcast panel.
+        "report_like": {
+            "ensemble_probability": probit["ensemble_probability"],
+            "recession_state": probit.get("recession_state", "expansion"),
+            "nowcast": probit.get("nowcast") or {},
+        },
     }
     history = pd.DataFrame({"ensemble": probit["ensemble_history"]})
     return current, history
@@ -220,7 +227,7 @@ def main() -> None:
             # Bump this version string whenever model code changes — Streamlit's
             # cache_resource doesn't track imported modules, so a code edit to
             # e.g. src/models/lame.py won't otherwise invalidate the cached fit.
-            models = _build_models("v15-market-implied")
+            models = _build_models("v17-bic-constrained")
     except Exception as exc:
         _header(None)
         _nav()

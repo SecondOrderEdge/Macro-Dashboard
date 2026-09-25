@@ -107,12 +107,12 @@ def build_ladder(panel: pd.DataFrame, probit: dict | None = None, lame=None) -> 
         "critical" if v >= 0.5 else "high" if v >= 0.4 else "elevated" if v >= 0.2 else "low",
         "3-mo unemployment vs its 12-mo low; triggers at +0.5.", dt)
 
-    # 5) Recession ensemble (the synthesized 12-month forward read).
+    # 5) Recession-start ensemble (P(new NBER recession starts within 12 months)).
     v = _ensemble(probit)
-    add("ensemble", "Recession ensemble (12-mo)", "macro", "12-mo model",
+    add("ensemble", "Recession-start ensemble (12-mo)", "macro", "12-mo model",
         v, f"{v:.0f}%" if np.isfinite(v) else "—", np.isfinite(v) and v > 30,
         "critical" if v > 50 else "high" if v > 30 else "elevated" if v > 15 else "low",
-        "Four-model 12-month-ahead probability; warning >30%, elevated >50%.", None)
+        "Four-model probability that a new recession starts within 12 months; warning >30%, elevated >50%.", None)
 
     # 6) Breadth deterioration.
     v = _below_trend(lame)
