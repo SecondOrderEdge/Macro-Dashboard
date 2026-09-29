@@ -21,14 +21,22 @@ Data path:
 
 Either source returns the same monthly CAPE series. Any failure returns an
 empty Series so the dashboard degrades gracefully rather than crashing.
+
+The same bundled file carries Shiller's real total-return price index. From
+that index we build the subsequent 10-year annualized real total return and
+an OLS map from the CAPE earnings yield (1/CAPE) to that return. The map is
+display-only valuation context: it is not an input to the recession ensemble,
+the composite, or LAME.
 """
 
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 _BUNDLED_PATH = Path(__file__).resolve().parents[2] / "data" / "cape.csv"
@@ -371,14 +379,15 @@ def cape_extras_summary(extras: pd.DataFrame, modern_start: str = "1950-01-01") 
 
 
 def _parse_shiller_full(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse the Shiller 'Data' sheet into date, cape, tr_cape, ecy.
+    """Parse the Shiller 'Data' sheet into date, cape, tr_cape, ecy, real_tr_price.
 
-    Column labels in the workbook: ``CAPE``, ``TR CAPE``, and ``Yield`` (the
-    Excess CAPE Yield, stored as a fraction). The first column is the Yale
-    fractional date. Missing columns come back as NaN.
+    Column labels in the workbook: ``CAPE``, ``TR CAPE``, ``Yield`` (the
+    Excess CAPE Yield, stored as a fraction), and the real total-return price
+    index. The first column is the Yale fractional date. Missing columns come
+    back as NaN.
     """
     if df.empty:
-        return pd.DataFrame(columns=["date", "cape", "tr_cape", "ecy"])
+        return pd.DataFrame(columns=["date", "cape", "tr_cape", "ecy", "real_tr_price"])
     date_col = df.columns[0]
     out = pd.DataFrame()
     out["date"] = df[date_col].apply(_yale_date_to_timestamp)
@@ -393,6 +402,190 @@ def _parse_shiller_full(df: pd.DataFrame) -> pd.DataFrame:
     if ecy.notna().any() and ecy.abs().median() > 0.5:
         ecy = pd.Series([float("nan")] * len(df))
     out["ecy"] = ecy
+    # Positional: the helper returns one value per source row, same order.
+    out["real_tr_price"] = _real_total_return_price(df).to_numpy()
 
     out = out.dropna(subset=["date", "cape"]).sort_values("date").reset_index(drop=True)
     return out
+
+
+def _real_total_return_price(df: pd.DataFrame) -> pd.Series:
+    """Shiller's real total-return price index.
+
+    The workbook header spells this "Real Total Return Price", but the single
+    header row the refresh keeps (``skiprows=7``) labels both the real price
+    and the real total-return price as ``Price``. pandas disambiguates them
+    as ``Price`` and ``Price.1``; the second is the total-return index
+    (column 9 on the Data sheet).
+    """
+    nan = pd.Series([float("nan")] * len(df), index=df.index)
+    for c in df.columns:
+        key = re.sub(r"[^A-Z0-9]", "", str(c).upper())
+        if "TOTALRETURN" in key and "PRICE" in key:
+            return pd.to_numeric(df[c], errors="coerce")
+    price_cols = [
+        c for c in df.columns
+        if re.sub(r"\.\d+$", "", str(c)).strip().upper() == "PRICE"
+    ]
+    if len(price_cols) >= 2:
+        return pd.to_numeric(df[price_cols[1]], errors="coerce")
+    return nan
+
+
+# ------------------------------------------------- 10y real return from CAPE
+
+
+# Ten years of monthly observations. The annualized return is
+# (P_{t+120} / P_t) ** (1/10) - 1, i.e. exponent 12/120.
+_RETURN_HORIZON_MONTHS = 120
+# A line needs a real cloud, not a handful of overlapping months.
+_MIN_FIT_OBS = 60
+
+
+def subsequent_10y_real_return(
+    real_tr_price: pd.Series,
+    horizon_months: int = _RETURN_HORIZON_MONTHS,
+) -> pd.Series:
+    """Annualized real total return over the next ``horizon_months`` months.
+
+    ``(P_{t+h} / P_t) ** (12/h) - 1``. For the 10-year window (h = 120) this
+    is the compound annual growth of Shiller's real total-return price index,
+    and it reproduces his published "10 Year Annualized Stock Real Return"
+    column. A month is left blank when there is no price exactly ``h`` months
+    later (the window has not elapsed, or the monthly calendar has a gap).
+    """
+    price = pd.to_numeric(real_tr_price, errors="coerce").sort_index()
+    price = price[~price.index.duplicated(keep="last")]
+    out = pd.Series(np.nan, index=price.index, dtype=float, name="fwd_real_return_10y")
+    if horizon_months < 1 or len(price) <= horizon_months:
+        return out
+
+    future = price.shift(-horizon_months)
+    future_dates = pd.Series(price.index, index=price.index).shift(-horizon_months)
+    expected = price.index + pd.DateOffset(months=int(horizon_months))
+    delta = pd.to_datetime(future_dates.to_numpy()) - pd.to_datetime(expected.to_numpy())
+    on_calendar = pd.Series(np.abs(delta) <= pd.Timedelta(days=5), index=price.index).fillna(False)
+
+    ratio = future / price
+    ann = ratio ** (12.0 / float(horizon_months)) - 1.0
+    ok = on_calendar & (price > 0) & (future > 0) & np.isfinite(ann)
+    mask = ok.fillna(False).to_numpy(dtype=bool)
+    out.iloc[mask] = ann.to_numpy(dtype=float)[mask]
+    return out
+
+
+def load_cape_return_history(path: Path | None = None) -> pd.DataFrame:
+    """CAPE, real total-return price, and the subsequent 10-year real return.
+
+    Reads the bundled ``data/cape.csv`` (or ``path``). The forward return is
+    computed here from ``real_tr_price``; it is not a stored lookup table.
+    Returns an empty frame if the price column is absent, so an older CSV
+    still leaves the rest of the CAPE panel usable.
+    """
+    cols = ["cape", "real_tr_price", "fwd_real_return_10y"]
+    path = path or _BUNDLED_PATH
+    try:
+        if not path.exists():
+            return pd.DataFrame(columns=cols)
+        df = pd.read_csv(path)
+        if "date" not in df.columns:
+            return pd.DataFrame(columns=cols)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"]).drop_duplicates("date").set_index("date").sort_index()
+        out = pd.DataFrame(index=df.index)
+        out["cape"] = (
+            pd.to_numeric(df["cape"], errors="coerce") if "cape" in df.columns else np.nan
+        )
+        if "real_tr_price" in df.columns:
+            out["real_tr_price"] = pd.to_numeric(df["real_tr_price"], errors="coerce")
+        else:
+            out["real_tr_price"] = np.nan
+        out["fwd_real_return_10y"] = subsequent_10y_real_return(out["real_tr_price"])
+        return out
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=cols)
+
+
+def fit_cape_expected_return(
+    cape: pd.Series,
+    fwd_real_return: pd.Series,
+    min_obs: int = _MIN_FIT_OBS,
+) -> dict:
+    """OLS of the subsequent 10-year real total return on the CAPE earnings yield.
+
+    Specification::
+
+        r_{t → t+10} = α + β · (1 / CAPE_t) + ε_t
+
+    Why 1/CAPE rather than CAPE. Campbell and Shiller's present-value identity
+    (Campbell & Shiller 1988; Campbell & Shiller 1998, "Valuation Ratios and
+    the Long-Run Stock Market Outlook") writes a valuation *yield* as the
+    discounted sum of expected future returns and earnings growth. Holding
+    expected real earnings growth roughly constant, long-horizon real returns
+    are approximately linear in the earnings yield E10/P = 1/CAPE, not in the
+    multiple. That is also the yield inside Shiller's Excess CAPE Yield
+    (1/CAPE minus the real bond yield). Their published regressions often use
+    log(P/E), which traces nearly the same curve; a straight line in CAPE
+    itself is the worse-documented alternative and runs off toward large
+    negative returns as the multiple rises. On the full Shiller history the
+    earnings-yield fit matches the cloud at least as well as a line in CAPE.
+
+    Overlapping ten-year windows are not independent observations, so R²
+    overstates how precise the relationship is. The result is a historical
+    statistical description for the valuation panel, not a forecast, not
+    investment advice, and not an input to the recession models.
+
+    Returns ``{}`` when fewer than ``min_obs`` paired months are available.
+    """
+    paired = pd.DataFrame({"cape": cape, "r": fwd_real_return}).dropna()
+    paired = paired[np.isfinite(paired["cape"]) & (paired["cape"] > 0)]
+    paired = paired[np.isfinite(paired["r"])]
+    if len(paired) < min_obs:
+        return {}
+
+    earnings_yield = 1.0 / paired["cape"].to_numpy(dtype=float)
+    y = paired["r"].to_numpy(dtype=float)
+    design = np.column_stack([np.ones(len(y)), earnings_yield])
+    coef, _, _, _ = np.linalg.lstsq(design, y, rcond=None)
+    alpha = float(coef[0])
+    beta = float(coef[1])
+    fitted = design @ np.asarray(coef, dtype=float)
+    ss_res = float(np.sum((y - fitted) ** 2))
+    ss_tot = float(np.sum((y - float(y.mean())) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return {
+        "alpha": alpha,
+        "beta": beta,
+        "r2": float(r2),
+        "n": int(len(paired)),
+        "predictor": "inverse_cape",
+        "sample_start": paired.index.min(),
+        "sample_end": paired.index.max(),
+        "realized_median": float(np.median(y)),
+    }
+
+
+def implied_10y_real_return(cape_today: float, fit: dict) -> float:
+    """Plug a CAPE reading into a fit from :func:`fit_cape_expected_return`."""
+    if not fit or cape_today is None or not np.isfinite(cape_today) or float(cape_today) <= 0:
+        return float("nan")
+    return float(fit["alpha"] + fit["beta"] / float(cape_today))
+
+
+def implied_return_band(ann_return: float) -> tuple[str, str]:
+    """Display band for an implied 10-year annualized real return.
+
+    Anchored to round levels around the long-run average subsequent real
+    return in the Shiller sample (about 7% annualized). A low implied return
+    is the expensive-valuation reading. Labels are for the chart, not a
+    recommendation.
+    """
+    if ann_return is None or not np.isfinite(ann_return):
+        return "—", "elevated"
+    if ann_return >= 0.07:
+        return "ABOVE AVG", "low"
+    if ann_return >= 0.04:
+        return "BELOW AVG", "elevated"
+    if ann_return >= 0.02:
+        return "LOW", "high"
+    return "VERY LOW", "critical"

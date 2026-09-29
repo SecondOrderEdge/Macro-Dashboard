@@ -1,8 +1,10 @@
 """Refresh data/cape.csv from Robert Shiller's published spreadsheet.
 
 Downloads Shiller's Excel (the canonical, monthly-updated source), parses CAPE,
-TR CAPE, and the Excess CAPE Yield with the same parser the app uses, validates
-it, and writes ``data/cape.csv`` (``date,cape,tr_cape,ecy``). Run by
+TR CAPE, the Excess CAPE Yield, and the real total-return price index with the
+same parser the app uses, validates it, and writes ``data/cape.csv``
+(``date,cape,tr_cape,ecy,real_tr_price``). The real total-return price is what
+the dashboard compounds into subsequent 10-year real returns. Run by
 ``.github/workflows/refresh-cape.yml`` monthly; the workflow commits only when
 the data changed. The in-app live fetch remains as a fallback.
 
@@ -155,6 +157,11 @@ def main() -> int:
     latest_val = float(best["cape"].iloc[-1])
     if not (3.0 < latest_val < 80.0):
         print(f"ERROR: latest CAPE {latest_val} is outside the sane range (3–80).")
+        return 1
+
+    n_price = int(best["real_tr_price"].notna().sum()) if "real_tr_price" in best.columns else 0
+    if n_price < 100 or not (best["real_tr_price"].dropna() > 0).all():
+        print(f"ERROR: real total-return price missing or non-positive ({n_price} rows).")
         return 1
 
     prior = _existing_latest()

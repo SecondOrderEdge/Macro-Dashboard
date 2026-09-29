@@ -20,7 +20,10 @@ def test_print_html_is_complete_and_light():
         assert f"{n}." in html, f"section {n} missing from export"
 
     # Spot-check content from across the whole page, including the newest bits.
-    for marker in ("Philosophy", "Beveridge", "Excess CAPE Yield", "Breadth", "Reproducibility"):
+    for marker in (
+        "Philosophy", "Beveridge", "Excess CAPE Yield", "Implied 10-year real return",
+        "Breadth", "Reproducibility",
+    ):
         assert marker in html, f"expected '{marker}' in printable export"
 
 
