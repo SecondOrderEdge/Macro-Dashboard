@@ -757,6 +757,8 @@ def _row_valuation_cape(nber: pd.Series) -> None:
         apply_template(fig, height=300, show_legend=False)
         st.plotly_chart(fig, use_container_width=True)
 
+    implied = _render_cape_expected_return(today)
+
     # --- Interpretation panel --------------------------------------------
     if pct >= 85:
         verdict = (
@@ -813,6 +815,7 @@ def _row_valuation_cape(nber: pd.Series) -> None:
         "valuation determines the <i>magnitude</i> of potential equity damage if a recession "
         "does arrive.</p>"
         f"<p>{verdict}</p>"
+        f"{_cape_forward_note(implied)}"
         f"{ecy_note}"
         f'<p style="color:{PALETTE["text_muted"]};font-size:11px;margin-top:8px;">'
         'Sources: <a href="http://www.econ.yale.edu/~shiller/data.htm" '
@@ -823,6 +826,205 @@ def _row_valuation_cape(nber: pd.Series) -> None:
         "</p>"
         "</div></div>",
         unsafe_allow_html=True,
+    )
+
+
+def _render_cape_expected_return(cape_today: float) -> dict | None:
+    """Metric card + CAPE-vs-subsequent-10y-real-return scatter.
+
+    Sits under the CAPE history chart. Returns the fit payload for the
+    interpretation copy, or ``None`` when the bundled price index is absent.
+    Display only — nothing here feeds the recession ensemble.
+    """
+    from src.data.cape import (
+        fit_cape_expected_return,
+        implied_10y_real_return,
+        implied_return_band,
+        load_cape_return_history,
+    )
+
+    hist = load_cape_return_history()
+    if hist.empty or hist["fwd_real_return_10y"].dropna().empty:
+        return None
+    fit = fit_cape_expected_return(hist["cape"], hist["fwd_real_return_10y"])
+    if not fit:
+        return None
+    implied = implied_10y_real_return(cape_today, fit)
+    if not np.isfinite(implied):
+        return None
+
+    label, severity = implied_return_band(implied)
+    sev_to_color = {
+        "low": PALETTE["risk_low"],
+        "elevated": PALETTE["risk_elevated"],
+        "high": PALETTE["risk_high"],
+        "critical": PALETTE["risk_critical"],
+    }
+    color = sev_to_color[severity]
+    start = fit["sample_start"]
+    end = fit["sample_end"]
+
+    st.markdown(
+        '<div class="label-small" style="margin-top:8px;">'
+        "CAPE and subsequent 10-year real return · historical relationship</div>",
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1, 3])
+    with left:
+        st.markdown(
+            metric_card(
+                label="Implied 10y real return",
+                value=f"{implied * 100:+.1f}",
+                unit="%",
+                risk_color_hex=color,
+                badge=label,
+                subline=(
+                    f"annualized · from CAPE {cape_today:.1f}× · 1/CAPE OLS · "
+                    f"{start.strftime('%Y')}–{end.strftime('%Y')}"
+                ),
+            ),
+            unsafe_allow_html=True,
+        )
+        rows = [
+            ("Specification", f"{fit['alpha'] * 100:.2f}% + {fit['beta']:.3f}/CAPE"),
+            ("In-sample R²", f"{fit['r2']:.2f}"),
+            ("Paired months", f"{fit['n']} · {start.strftime('%Y')}–{end.strftime('%Y')}"),
+            ("Median realized, ann.", f"{fit['realized_median'] * 100:.1f}%"),
+        ]
+        body = "".join(
+            f'<div class="submodel-row"><span class="name">{lbl}</span>'
+            f'<span class="value">{val}</span></div>'
+            for lbl, val in rows
+        )
+        st.markdown(
+            f'<div class="panel"><div class="panel-body">{body}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        paired = hist[["cape", "fwd_real_return_10y"]].dropna()
+        paired = paired[paired["cape"] > 0]
+        fig = _cape_return_scatter(paired, fit, cape_today, implied, color)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            f'<div style="color:{PALETTE["text_tiny"]};font-size:11px;line-height:1.5;'
+            f'margin-top:-6px;margin-bottom:8px;">'
+            "Historical statistical relationship between starting CAPE and the "
+            "annualized real total return over the next ten years. Research context, "
+            "not a forecast or investment advice. Overlapping 10-year windows are not "
+            "independent observations."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    return {"implied": implied, "fit": fit, "band": label}
+
+
+def _cape_return_scatter(
+    paired: pd.DataFrame,
+    fit: dict,
+    cape_today: float,
+    implied: float,
+    color: str,
+) -> go.Figure:
+    """CAPE (x) vs subsequent 10y real return (y), with the 1/CAPE OLS curve."""
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=paired["cape"],
+            y=paired["fwd_real_return_10y"] * 100.0,
+            mode="markers",
+            marker=dict(size=5, color=_cape_fade(PALETTE["text_muted"], 0.45)),
+            name="Realized",
+            customdata=paired.index.strftime("%b %Y"),
+            hovertemplate=(
+                "%{customdata}<br>CAPE %{x:.1f}×<br>subsequent %{y:.1f}% ann.<extra></extra>"
+            ),
+        )
+    )
+    lo = float(min(paired["cape"].min(), cape_today))
+    hi = float(max(paired["cape"].max(), cape_today))
+    grid = np.linspace(max(5.0, lo * 0.95), hi * 1.03, 200)
+    fitted = (fit["alpha"] + fit["beta"] / grid) * 100.0
+    fig.add_trace(
+        go.Scatter(
+            x=grid,
+            y=fitted,
+            mode="lines",
+            line=dict(color=PALETTE["accent"], width=2),
+            name="OLS · a + b/CAPE",
+            hovertemplate="CAPE %{x:.1f}×<br>fitted %{y:.1f}% ann.<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[cape_today],
+            y=[implied * 100.0],
+            mode="markers",
+            marker=dict(
+                size=13,
+                color=color,
+                symbol="diamond",
+                line=dict(width=1, color=PALETTE["text_primary"]),
+            ),
+            name="Today",
+            hovertemplate=(
+                f"Today's CAPE {cape_today:.1f}×<br>implied {implied * 100:.1f}% ann."
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(
+        y=0,
+        line=dict(color=PALETTE["text_tiny"], width=1, dash="dot"),
+    )
+    fig.add_annotation(
+        x=cape_today,
+        y=implied * 100.0,
+        text=f"today · {implied * 100:+.1f}% ann.",
+        showarrow=True,
+        arrowhead=2,
+        ax=-56,
+        ay=-32,
+        arrowcolor=color,
+        arrowwidth=1,
+        font=dict(color=PALETTE["text_primary"], size=11),
+        bgcolor="rgba(10,13,18,0.75)",
+        borderpad=3,
+    )
+    fig.update_xaxes(title="Starting CAPE")
+    fig.update_yaxes(title="10y real return, annualized", ticksuffix="%")
+    apply_template(fig, height=340, show_legend=True)
+    fig.update_layout(
+        margin=dict(t=28, b=56),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            x=0,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+    return fig
+
+
+def _cape_forward_note(implied: dict | None) -> str:
+    """One paragraph tying the scatter to the 'How to read this' copy."""
+    if not implied:
+        return ""
+    pct = implied["implied"] * 100.0
+    return (
+        "<p>The scatter above is that long-horizon relationship made quantitative. "
+        "Each point is a month's CAPE against the annualized <b>real</b> total return "
+        "the S&amp;P actually delivered over the next ten years, compounded from "
+        "Shiller's real total-return price index. The curve is an OLS fit on the "
+        "earnings yield, <b>1/CAPE</b> (Campbell–Shiller), the linear predictor in "
+        "the present-value identity. Plugging today's CAPE into that "
+        f"historical fit implies about <b>{pct:+.1f}%</b> annualized real over ten "
+        "years. The cloud is wide, and overlapping windows are not independent draws: "
+        "this is a historical statistical relationship, not a forecast and not "
+        "investment advice.</p>"
     )
 
 
