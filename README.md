@@ -24,6 +24,23 @@ What's novel — for a public dashboard — is the transparent decomposition. Ev
 
 **Yield curve.** Daily term structure with 11 maturities, three benchmark spreads (10Y−3M, 10Y−2Y, 5Y−2Y), and inversion statistics that condition on inversions lasting more than three months to avoid noise.
 
+## Dashboard tabs
+
+The three modules feed the headline. The app also has supporting views, giving ten tabs in total:
+
+| Tab | What it shows |
+|---|---|
+| Macro Dashboard | The headline composite, module cards and a Shiller CAPE valuation row |
+| Early Warning | A lead-time-ordered ladder of binary warning signals, from curve inversion down to volatility spikes. It is descriptive, not a forecast |
+| Recession | The four-model probit ensemble with the Chauvet–Piger benchmark (see below) |
+| Yield Curve | The term structure, benchmark spreads and inversion statistics |
+| Credit | A credit and funding-stress composite (HY/IG spreads, NFCI, St. Louis stress index, SLOOS) plus a CLO-supply gauge |
+| Labor | The LAME composite and its per-indicator breakdown |
+| Growth | Real GDP, Atlanta Fed GDPNow, real GDI, BEA contributions, the Weekly Economic Index and a coincident growth factor |
+| Pulse | Breadth and diffusion: the share of indicators below trend and deteriorating |
+| Policy Path | The market-implied FOMC rate distribution (see Data notes) |
+| Methodology | Data sources generated from the registry, the live feature set, and calibration |
+
 ## Methodology
 
 The BIC-selected model is built by forward-stepwise selection over the full FRED universe: a candidate feature is accepted only if it improves BIC, does not induce quasi-complete separation, and keeps every coefficient on the economically correct side (lower spread → higher risk; rising unemployment → higher risk; weaker sentiment and contracting credit → higher risk). The NY Fed and Wright models are re-estimated probits on fixed feature sets; Estrella–Mishkin uses frozen 2006 coefficients; Chauvet–Piger is FRED's published `RECPROUSM156N`.
@@ -61,10 +78,11 @@ The Recession page averages four methodologically distinct, academically grounde
 - The probit model drops any candidate feature covering less than 80% of the target window, so short-history series (e.g. JOLTS from 2000) don't shrink the estimation sample.
 - Non-monthly series are resampled to month-start (weekly→mean, daily→last, quarterly→forward-fill) before being aligned into the monthly panel the probit ensemble consumes.
 - The **Policy Path** tab reads a bundled CSV (`data/market_probability_tracker.csv`) built from the [Atlanta Fed Market Probability Tracker](https://www.atlantafed.org/cenfis/market-probability-tracker)'s *MPT Historical Data* (`.xlsx`) export — the market-implied distribution of the FOMC policy rate from CME SOFR options. A scheduled GitHub Action (`.github/workflows/refresh-market-probability.yml`) refreshes it daily: it downloads the `.xlsx`, validates it through the parser, and commits a new CSV only when the data changes (which redeploys the app). If the source blocks automated access, the last committed snapshot is served and can be refreshed manually by replacing the file; the tab and dashboard card show the snapshot **as-of date** so staleness is visible. Enabling it requires *Settings → Actions → General → Workflow permissions → Read and write*.
+- Shiller CAPE (`data/cape.csv`) is refreshed monthly from Robert Shiller's spreadsheet by `.github/workflows/refresh-cape.yml` (`scripts/refresh_cape.py`).
 
 ## Disclaimer
 
-This is a research project. Not investment advice. No warranty.
+This is a research project for informational and research purposes only. It is not financial or investment advice, and it comes with no warranty.
 
 ## License
 
